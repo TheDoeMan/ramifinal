@@ -148,6 +148,16 @@ export const createGameSession = (
     localStorage.setItem(PLAYER_ID_KEY, playerId);
 
     console.log(`Game created with ID: ${gameId}, host player ID: ${playerId}`);
+    console.log("Session created and stored:", session);
+
+    // Force multiple saves to ensure persistence
+    setTimeout(() => {
+      saveSessions();
+    }, 100);
+
+    setTimeout(() => {
+      saveSessions();
+    }, 300);
 
     // Return immediately for better responsiveness
     resolve({ gameId, playerId });
