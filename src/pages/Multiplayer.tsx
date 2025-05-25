@@ -72,6 +72,8 @@ const Multiplayer = () => {
   const [gameSession, setGameSession] = useState<GameSession | null>(null);
   const [yourTurn, setYourTurn] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState(0);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [isCountingDown, setIsCountingDown] = useState(false);
 
   // Check for existing session on component mount
   useEffect(() => {
@@ -168,9 +170,43 @@ const Multiplayer = () => {
           title: "Game started",
           description: "The game is now starting!",
         });
+        // Clear any countdown if game has started
+        setCountdown(null);
+        setIsCountingDown(false);
+      }
+
+      // Auto-start game when all players are ready (for host only)
+      if (
+        updatedSession.state === "waiting" &&
+        updatedSession.hostId === playerId &&
+        updatedSession.players.length >= 2 &&
+        updatedSession.players.every((p) => p.isReady) &&
+        !isCountingDown
+      ) {
+        // Start countdown to auto-start the game
+        setIsCountingDown(true);
+        setCountdown(5); // 5 second countdown
       }
     }
   };
+
+  // Countdown effect for automatic game start
+  useEffect(() => {
+    if (countdown === null || !isCountingDown) return;
+
+    if (countdown <= 0) {
+      // Start the game when countdown reaches zero
+      handleStartGame();
+      setIsCountingDown(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setCountdown(countdown - 1);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [countdown, isCountingDown]);
 
   // Create a new game
   const handleCreateGame = async () => {
@@ -619,10 +655,11 @@ const Multiplayer = () => {
                 className="mt-2 md:mt-0"
                 disabled={
                   gameSession.players.length < 2 ||
-                  !gameSession.players.every((p) => p.isReady)
+                  !gameSession.players.every((p) => p.isReady) ||
+                  isCountingDown
                 }
               >
-                Start Game
+                {isCountingDown ? `Starting in ${countdown}...` : "Start Game"}
               </Button>
             )}
         </div>
@@ -682,6 +719,27 @@ const Multiplayer = () => {
                   ) : (
                     <div className="text-green-400 mb-4">
                       All players ready! Game can start.
+                      {countdown !== null &&
+                        playerId === gameSession.hostId && (
+                          <div className="mt-2 text-white animate-pulse">
+                            Game starting in {countdown} seconds...
+                            <button
+                              onClick={() => {
+                                setCountdown(null);
+                                setIsCountingDown(false);
+                              }}
+                              className="ml-2 text-sm text-red-400 hover:text-red-300 underline"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      {countdown !== null &&
+                        playerId !== gameSession.hostId && (
+                          <div className="mt-2 text-white animate-pulse">
+                            Game starting in {countdown} seconds...
+                          </div>
+                        )}
                     </div>
                   )}
                 </>
