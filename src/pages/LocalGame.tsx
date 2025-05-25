@@ -363,13 +363,16 @@ const LocalGame: React.FC = () => {
               <Button
                 variant="outline"
                 onClick={() => setShowRules(true)}
-                className="w-full"
+                className="w-full text-white bg-white/10 border-white/20 hover:bg-white/20 hover:text-white"
               >
                 View Rules
               </Button>
 
               <Link to="/" className="block w-full">
-                <Button variant="outline" className="w-full">
+                <Button
+                  variant="outline"
+                  className="w-full text-white bg-white/10 border-white/20 hover:bg-white/20 hover:text-white"
+                >
                   Back to Menu
                 </Button>
               </Link>
