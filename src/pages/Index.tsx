@@ -30,36 +30,13 @@ const Index = () => {
               <div className="flex flex-col items-center">
                 <div className="w-16 h-16 mb-4 flex items-center justify-center text-white/80">
                   <svg
-                    <Link
-                      to="/rami"
-                      onClick={() => {
-                        // Clear any existing game state
-                        localStorage.removeItem("current_game_id");
-                        localStorage.removeItem("player_id");
-                        localStorage.removeItem("active_game_sessions");
-                      }}
-                      data-loc="/app/code/src/pages/Index.tsx:55:17"
-                      $name="Index"
-                      css={{
-                        display: "block",
-                        backgroundColor: "rgba(255, 255, 255, 0.1)",
-                        borderColor: "rgba(0, 0, 0, 0)",
-                        borderRadius: "6px",
-                        borderWidth: "1px",
-                        color: "rgb(255, 255, 255)",
-                        fontWeight: "500",
-                        paddingBottom: "8px",
-                        paddingLeft: "32px",
-                        paddingRight: "32px",
-                        paddingTop: "8px",
-                        transitionDuration: "0.15s",
-                        transitionTimingFunction:
-                          "cubic-bezier(0.4, 0, 0.2, 1)",
-                        pointerEvents: "auto",
-                      }}
-                    >
-                      Play vs CPU
-                    </Link>
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                     className="w-10 h-10"
                   >
                     <rect width="18" height="18" x="3" y="3" rx="2" />
@@ -79,9 +56,10 @@ const Index = () => {
                   to="/rami"
                   className="bg-white/10 hover:bg-white/20 text-white font-medium py-2 px-8 rounded-md transition-all border border-transparent hover:border-white/30"
                   onClick={() => {
-                    // Clear any existing game state from localStorage
+                    // Clear any existing game state
                     localStorage.removeItem("current_game_id");
                     localStorage.removeItem("player_id");
+                    localStorage.removeItem("active_game_sessions");
                   }}
                 >
                   Play vs CPU
@@ -119,9 +97,10 @@ const Index = () => {
                   to="/multiplayer"
                   className="bg-white/10 hover:bg-white/20 text-white font-medium py-2 px-8 rounded-md transition-all border border-transparent hover:border-white/30"
                   onClick={() => {
-                    // Clear any existing game state from localStorage
+                    // Clear any existing game state
                     localStorage.removeItem("current_game_id");
                     localStorage.removeItem("player_id");
+                    localStorage.removeItem("active_game_sessions");
                   }}
                 >
                   Play Online Game
