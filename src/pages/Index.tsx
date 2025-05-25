@@ -55,6 +55,11 @@ const Index = () => {
                 <Link
                   to="/rami"
                   className="bg-white/10 hover:bg-white/20 text-white font-medium py-2 px-8 rounded-md transition-all border border-transparent hover:border-white/30"
+                  onClick={() => {
+                    // Clear any existing game state from localStorage
+                    localStorage.removeItem("current_game_id");
+                    localStorage.removeItem("player_id");
+                  }}
                 >
                   Play vs CPU
                 </Link>
@@ -90,6 +95,11 @@ const Index = () => {
                 <Link
                   to="/multiplayer"
                   className="bg-white/10 hover:bg-white/20 text-white font-medium py-2 px-8 rounded-md transition-all border border-transparent hover:border-white/30"
+                  onClick={() => {
+                    // Clear any existing game state from localStorage
+                    localStorage.removeItem("current_game_id");
+                    localStorage.removeItem("player_id");
+                  }}
                 >
                   Play Online Game
                 </Link>

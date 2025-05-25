@@ -393,73 +393,94 @@ const LocalGame: React.FC = () => {
 
   // Start game with a human player and CPU opponents
   const startGame = (playerCount: number) => {
-    // Initialize game state
-    const deck = createDeck();
-    const players: Player[] = [];
+    try {
+      console.log("Starting game with", playerCount, "players");
 
-    // Create human player
-    players.push({
-      id: "player1",
-      name: "You",
-      hand: [],
-      points: 0,
-      hasLaidInitial51: false,
-      meldPoints: 0,
-      isComputer: false,
-    });
+      // Initialize game state
+      const deck = createDeck();
+      console.log("Deck created with", deck.length, "cards");
 
-    // Create CPU players
-    for (let i = 1; i < playerCount; i++) {
+      const players: Player[] = [];
+
+      // Create human player
       players.push({
-        id: `cpu${i}`,
-        name: `CPU ${i}`,
+        id: "player1",
+        name: "You",
         hand: [],
         points: 0,
         hasLaidInitial51: false,
         meldPoints: 0,
-        isComputer: true,
+        isComputer: false,
+      });
+
+      // Create CPU players
+      for (let i = 1; i < playerCount; i++) {
+        players.push({
+          id: `cpu${i}`,
+          name: `CPU ${i}`,
+          hand: [],
+          points: 0,
+          hasLaidInitial51: false,
+          meldPoints: 0,
+          isComputer: true,
+        });
+      }
+
+      console.log("Created", players.length, "players");
+
+      // Deal exactly 14 cards to each player
+      for (let p = 0; p < players.length; p++) {
+        players[p].hand = []; // Ensure hand is empty
+        for (let i = 0; i < 14 && deck.length > 0; i++) {
+          const card = deck.pop()!;
+          players[p].hand.push(card);
+        }
+
+        // Verify each player has exactly 14 cards
+        console.log(`Player ${p} has ${players[p].hand.length} cards`);
+      }
+
+      // Initial discard pile with one card
+      const discardPile: Card[] = [];
+      if (deck.length > 0) {
+        discardPile.push(deck.pop()!);
+      }
+
+      const newGameState = {
+        deck,
+        players,
+        currentPlayerIndex: 0,
+        discardPile,
+        melds: [],
+        gamePhase: "draw",
+        winner: null,
+        roundScores: {},
+        currentRound: 1,
+        drawnFromDiscard: false,
+        drawnCard: null,
+        cleanWinPossible: true, // At the start of the game, a clean win is possible
+        cpuThinking: false,
+      };
+
+      console.log("Game state initialized:", newGameState);
+
+      // First set state
+      setGameState(newGameState);
+
+      // Then update the UI
+      setTimeout(() => {
+        setShowSetup(false);
+      }, 100);
+
+      console.log("Game started successfully");
+    } catch (error) {
+      console.error("Error starting game:", error);
+      toast({
+        title: "Error Starting Game",
+        description: "There was a problem starting the game. Please try again.",
+        variant: "destructive",
       });
     }
-
-    // Deal exactly 14 cards to each player
-    for (let p = 0; p < players.length; p++) {
-      players[p].hand = []; // Ensure hand is empty
-      for (let i = 0; i < 14 && deck.length > 0; i++) {
-        const card = deck.pop()!;
-        players[p].hand.push(card);
-      }
-
-      // Verify each player has exactly 14 cards
-      if (players[p].hand.length !== 14) {
-        console.error(
-          `Player ${p} has ${players[p].hand.length} cards instead of 14`,
-        );
-      }
-    }
-
-    // Initial discard pile with one card
-    const discardPile: Card[] = [];
-    if (deck.length > 0) {
-      discardPile.push(deck.pop()!);
-    }
-
-    setGameState({
-      deck,
-      players,
-      currentPlayerIndex: 0,
-      discardPile,
-      melds: [],
-      gamePhase: "draw",
-      winner: null,
-      roundScores: {},
-      currentRound: 1,
-      drawnFromDiscard: false,
-      drawnCard: null,
-      cleanWinPossible: true, // At the start of the game, a clean win is possible
-      cpuThinking: false,
-    });
-
-    setShowSetup(false);
   };
 
   // Calculate current player - safe access with optional chaining
@@ -1051,6 +1072,7 @@ const LocalGame: React.FC = () => {
   // Run CPU moves when it's their turn
   useEffect(() => {
     if (gameState && currentPlayer?.isComputer && !gameState.cpuThinking) {
+      console.log("CPU's turn:", currentPlayer.name);
       const timer = setTimeout(() => {
         makeCPUMove();
       }, 1000);
@@ -1058,6 +1080,21 @@ const LocalGame: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [gameState, currentPlayer, makeCPUMove]);
+
+  // Debug effect to monitor game state changes
+  useEffect(() => {
+    if (gameState) {
+      console.log(
+        "Game state updated:",
+        "Phase:",
+        gameState.gamePhase,
+        "Current player:",
+        gameState.currentPlayerIndex,
+        "Player is CPU:",
+        gameState.players[gameState.currentPlayerIndex]?.isComputer,
+      );
+    }
+  }, [gameState]);
 
   // If game state is null, return setup screen
   if (!gameState) {
@@ -1087,7 +1124,7 @@ const LocalGame: React.FC = () => {
                   <SelectTrigger className="bg-white/10 border-white/20 text-white">
                     <SelectValue placeholder="Select number of players" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-50">
                     <SelectItem value="2">2 Players (You + 1 CPU)</SelectItem>
                     <SelectItem value="3">3 Players (You + 2 CPUs)</SelectItem>
                     <SelectItem value="4">4 Players (You + 3 CPUs)</SelectItem>
@@ -1096,7 +1133,14 @@ const LocalGame: React.FC = () => {
               </div>
 
               <Button
-                onClick={() => startGame(parseInt(numPlayers))}
+                onClick={() => {
+                  try {
+                    startGame(parseInt(numPlayers));
+                    console.log("Game start initiated");
+                  } catch (e) {
+                    console.error("Error in start game click handler:", e);
+                  }
+                }}
                 className="w-full"
               >
                 Start Game

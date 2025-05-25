@@ -32,6 +32,10 @@ try {
   const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
   if (savedSessions) {
     activeSessions = JSON.parse(savedSessions);
+    console.log(
+      "Loaded sessions from localStorage:",
+      Object.keys(activeSessions),
+    );
   }
 } catch (error) {
   console.error("Error loading sessions from localStorage:", error);
@@ -42,8 +46,47 @@ try {
 const saveSessions = () => {
   try {
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(activeSessions));
+    console.log("Saved sessions to localStorage:", Object.keys(activeSessions));
   } catch (error) {
     console.error("Error saving sessions to localStorage:", error);
+  }
+};
+
+// Global broadcast channel for cross-tab communication
+let broadcastChannel: BroadcastChannel | null = null;
+try {
+  broadcastChannel = new BroadcastChannel("game-sessions-sync");
+  broadcastChannel.onmessage = (event) => {
+    if (event.data && event.data.type === "sessions-update") {
+      try {
+        const updatedSessions = JSON.parse(
+          localStorage.getItem(SESSION_STORAGE_KEY) || "{}",
+        );
+        activeSessions = updatedSessions;
+        console.log(
+          "Sessions updated via broadcast:",
+          Object.keys(activeSessions),
+        );
+      } catch (error) {
+        console.error("Error syncing sessions:", error);
+      }
+    }
+  };
+} catch (e) {
+  console.log("BroadcastChannel not supported in this browser");
+}
+
+// Notify other tabs/windows about session updates
+const notifySessionsUpdate = () => {
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({
+        type: "sessions-update",
+        time: Date.now(),
+      });
+    } catch (e) {
+      console.error("Error broadcasting session update:", e);
+    }
   }
 };
 
@@ -96,8 +139,26 @@ export const joinGameSession = (
   playerName: string,
 ): Promise<{ success: boolean; playerId?: string; error?: string }> => {
   return new Promise((resolve) => {
+    console.log(`Attempting to join session ${gameId} as ${playerName}`);
+
+    // Try to read latest sessions
+    try {
+      const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (savedSessions) {
+        const parsedSessions = JSON.parse(savedSessions);
+        if (parsedSessions[gameId]) {
+          console.log("Found session in localStorage that wasn't in memory");
+          activeSessions = parsedSessions;
+        }
+      }
+    } catch (e) {
+      console.error("Error checking for session updates:", e);
+    }
+
     // Check if session exists
     if (!activeSessions[gameId]) {
+      console.log(`Session ${gameId} not found, checking format`);
+
       // Try to create a new session if the game code is valid format
       if (gameId.length === 6 && /^[A-Z0-9]+$/.test(gameId)) {
         // Create a new session with this ID for compatibility
@@ -121,8 +182,10 @@ export const joinGameSession = (
         };
 
         saveSessions();
+        notifySessionsUpdate();
         console.log(`Created new session with ID ${gameId} for joining player`);
       } else {
+        console.log(`Invalid game code format: ${gameId}`);
         resolve({
           success: false,
           error: "Game session not found",
@@ -136,6 +199,9 @@ export const joinGameSession = (
 
     // Add player to session
     const session = activeSessions[gameId];
+    console.log(
+      `Joining existing session with ${session.players.length} players`,
+    );
 
     // Check if game is full
     if (session.players.length >= 4) {
@@ -165,13 +231,17 @@ export const joinGameSession = (
     });
     session.lastUpdated = Date.now();
     saveSessions();
+    notifySessionsUpdate();
 
     // Store locally for this client
     localStorage.setItem(GAME_ID_KEY, gameId);
     localStorage.setItem(PLAYER_ID_KEY, playerId);
 
     console.log(`Player ${playerName} (${playerId}) joined session ${gameId}`);
-    console.log("Current players:", session.players);
+    console.log(
+      "Current players:",
+      session.players.map((p) => p.name),
+    );
 
     // Return immediately for better responsiveness
     resolve({ success: true, playerId });
@@ -183,8 +253,38 @@ export const joinGameSession = (
  */
 export const getGameSession = (gameId: string): Promise<GameSession | null> => {
   return new Promise((resolve) => {
+    // Check if we have the latest session data from localStorage
+    try {
+      const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (savedSessions) {
+        const parsedSessions = JSON.parse(savedSessions);
+        if (parsedSessions[gameId]) {
+          // If localStorage has a newer version (by timestamp), use that
+          if (
+            !activeSessions[gameId] ||
+            parsedSessions[gameId].lastUpdated >
+              activeSessions[gameId].lastUpdated
+          ) {
+            console.log("Using newer session data from localStorage");
+            activeSessions = parsedSessions;
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error checking for session updates:", e);
+    }
+
+    const session = activeSessions[gameId] || null;
+    if (session) {
+      console.log(
+        `Got session ${gameId} with ${session.players.length} players`,
+      );
+    } else {
+      console.log(`Session ${gameId} not found`);
+    }
+
     // Return immediately for better responsiveness
-    resolve(activeSessions[gameId] || null);
+    resolve(session);
   });
 };
 
@@ -197,8 +297,22 @@ export const updatePlayerStatus = (
   isReady: boolean,
 ): Promise<boolean> => {
   return new Promise((resolve) => {
+    // Check if we have the latest session data
+    try {
+      const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (savedSessions) {
+        const parsedSessions = JSON.parse(savedSessions);
+        if (parsedSessions[gameId]) {
+          activeSessions = parsedSessions;
+        }
+      }
+    } catch (e) {
+      console.error("Error syncing before status update:", e);
+    }
+
     const session = activeSessions[gameId];
     if (!session) {
+      console.error(`Cannot update player status: Session ${gameId} not found`);
       resolve(false);
       return;
     }
@@ -206,6 +320,9 @@ export const updatePlayerStatus = (
     // Find and update player
     const playerIndex = session.players.findIndex((p) => p.id === playerId);
     if (playerIndex === -1) {
+      console.error(
+        `Cannot update player status: Player ${playerId} not found in session ${gameId}`,
+      );
       resolve(false);
       return;
     }
@@ -214,9 +331,16 @@ export const updatePlayerStatus = (
     session.players[playerIndex].isReady = isReady;
     session.lastUpdated = Date.now();
     saveSessions();
+    notifySessionsUpdate();
 
     console.log(
       `Player ${session.players[playerIndex].name} is now ${isReady ? "ready" : "not ready"}`,
+    );
+    console.log(
+      "Current players:",
+      session.players.map(
+        (p) => `${p.name}: ${p.isReady ? "ready" : "not ready"}`,
+      ),
     );
 
     // Check if all players are ready, and this is the last player to get ready
@@ -238,6 +362,19 @@ export const startGameSession = (
   hostId: string,
 ): Promise<boolean> => {
   return new Promise((resolve) => {
+    // Make sure we have the latest session data
+    try {
+      const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (savedSessions) {
+        const parsedSessions = JSON.parse(savedSessions);
+        if (parsedSessions[gameId]) {
+          activeSessions = parsedSessions;
+        }
+      }
+    } catch (e) {
+      console.error("Error syncing before game start:", e);
+    }
+
     const session = activeSessions[gameId];
     if (!session) {
       console.error(`Cannot start game: Session ${gameId} not found`);
@@ -267,10 +404,21 @@ export const startGameSession = (
     session.state = "playing";
     session.lastUpdated = Date.now();
     saveSessions();
+    notifySessionsUpdate();
 
     // Log that the game has started for debugging
     console.log(`Game ${gameId} started by host ${hostId}`);
     console.log("Session state:", session);
+
+    // Force an additional notification after a short delay
+    setTimeout(() => {
+      try {
+        notifySessionsUpdate();
+        console.log("Sent delayed session update notification");
+      } catch (e) {
+        console.error("Error in delayed notification:", e);
+      }
+    }, 500);
 
     // Resolve immediately to avoid delays
     resolve(true);
@@ -349,9 +497,16 @@ export const startSessionMonitoring = (
   gameId: string,
   onSessionUpdate: (session: GameSession) => void,
 ): (() => void) => {
+  console.log(`Starting monitoring for session ${gameId}`);
+
   // Initial session fetch
   getGameSession(gameId).then((session) => {
     if (session) {
+      console.log(
+        `Initial session data for ${gameId}:`,
+        `Players: ${session.players.length}`,
+        `State: ${session.state}`,
+      );
       onSessionUpdate(session);
     } else {
       console.error(`No session found with ID ${gameId} for monitoring`);
@@ -363,8 +518,40 @@ export const startSessionMonitoring = (
     clearInterval(pollingInterval);
   }
 
-  // Set up polling for updates with increased frequency
+  // Set up polling for updates
   pollingInterval = setInterval(() => {
+    try {
+      // Check for updated session in localStorage first
+      const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (savedSessions) {
+        const parsedSessions = JSON.parse(savedSessions);
+        if (parsedSessions[gameId]) {
+          // If localStorage has a newer version (by timestamp), use that
+          if (
+            !activeSessions[gameId] ||
+            parsedSessions[gameId].lastUpdated >
+              activeSessions[gameId].lastUpdated
+          ) {
+            console.log("Found newer session data in localStorage");
+            activeSessions = parsedSessions;
+            const session = activeSessions[gameId];
+            if (session) {
+              console.log(
+                `Session update via localStorage polling:`,
+                `Players: ${session.players.length}`,
+                `State: ${session.state}`,
+              );
+              onSessionUpdate(session);
+              return; // Skip the regular getGameSession call
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error checking localStorage during polling:", e);
+    }
+
+    // Fall back to regular session check
     getGameSession(gameId).then((session) => {
       if (session) {
         onSessionUpdate(session);
@@ -373,46 +560,98 @@ export const startSessionMonitoring = (
   }, POLLING_INTERVAL);
 
   // Set up a WebSocket-like broadcast channel for even faster updates
+  let channelCleanup: (() => void) | null = null;
+
   try {
-    const broadcastChannel = new BroadcastChannel(`game-session-${gameId}`);
-    broadcastChannel.onmessage = (event) => {
+    const gameChannel = new BroadcastChannel(`game-session-${gameId}`);
+    gameChannel.onmessage = (event) => {
       if (event.data && event.data.type === "session-update") {
-        const session = activeSessions[gameId];
-        if (session) {
-          onSessionUpdate(session);
+        console.log("Received session update broadcast");
+        try {
+          // Always check localStorage for the latest data
+          const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+          if (savedSessions) {
+            const parsedSessions = JSON.parse(savedSessions);
+            if (parsedSessions[gameId]) {
+              activeSessions = parsedSessions;
+              const session = activeSessions[gameId];
+              if (session) {
+                console.log(
+                  `Session update via broadcast:`,
+                  `Players: ${session.players.length}`,
+                  `State: ${session.state}`,
+                );
+                onSessionUpdate(session);
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error processing broadcast update:", e);
         }
       }
     };
 
-    // Return cleanup function that handles both interval and broadcast channel
-    return () => {
-      if (pollingInterval !== null) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-      }
-      broadcastChannel.close();
+    // Global channel for all session updates
+    if (broadcastChannel) {
+      broadcastChannel.onmessage = (event) => {
+        if (event.data && event.data.type === "sessions-update") {
+          console.log("Received global sessions update");
+          try {
+            // Check localStorage for the latest data
+            const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+            if (savedSessions) {
+              const parsedSessions = JSON.parse(savedSessions);
+              if (parsedSessions[gameId]) {
+                activeSessions = parsedSessions;
+                const session = activeSessions[gameId];
+                if (session) {
+                  console.log(
+                    `Session update via global broadcast:`,
+                    `Players: ${session.players.length}`,
+                    `State: ${session.state}`,
+                  );
+                  onSessionUpdate(session);
+                }
+              }
+            }
+          } catch (e) {
+            console.error("Error processing global broadcast update:", e);
+          }
+        }
+      };
+    }
+
+    channelCleanup = () => {
+      gameChannel.close();
     };
   } catch (e) {
     console.log("BroadcastChannel not supported, falling back to polling only");
-
-    // Return cleanup function for interval only
-    return () => {
-      if (pollingInterval !== null) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-      }
-    };
   }
+
+  // Return cleanup function
+  return () => {
+    console.log(`Stopping monitoring for session ${gameId}`);
+    if (pollingInterval !== null) {
+      clearInterval(pollingInterval);
+      pollingInterval = null;
+    }
+    if (channelCleanup) {
+      channelCleanup();
+    }
+  };
 };
 
 // Function to notify all tabs/windows about session updates
 const notifySessionUpdate = (gameId: string) => {
   try {
-    const broadcastChannel = new BroadcastChannel(`game-session-${gameId}`);
-    broadcastChannel.postMessage({ type: "session-update", time: Date.now() });
-    broadcastChannel.close();
+    const gameChannel = new BroadcastChannel(`game-session-${gameId}`);
+    gameChannel.postMessage({ type: "session-update", time: Date.now() });
+    setTimeout(() => {
+      gameChannel.close();
+    }, 100);
+    console.log(`Sent session update notification for game ${gameId}`);
   } catch (e) {
-    // BroadcastChannel not supported in this browser, ignore
+    console.error("Error sending game-specific update:", e);
   }
 };
 
