@@ -424,11 +424,16 @@ const LocalGame: React.FC = () => {
     // Deal exactly 14 cards to each player
     for (let p = 0; p < players.length; p++) {
       players[p].hand = []; // Ensure hand is empty
-      for (let i = 0; i < 14; i++) {
-        if (deck.length > 0) {
-          const card = deck.pop()!;
-          players[p].hand.push(card);
-        }
+      for (let i = 0; i < 14 && deck.length > 0; i++) {
+        const card = deck.pop()!;
+        players[p].hand.push(card);
+      }
+
+      // Verify each player has exactly 14 cards
+      if (players[p].hand.length !== 14) {
+        console.error(
+          `Player ${p} has ${players[p].hand.length} cards instead of 14`,
+        );
       }
     }
 
@@ -540,6 +545,16 @@ const LocalGame: React.FC = () => {
       if (!prev) return prev;
       const newState = { ...prev };
 
+      // Check if CPU already has 14 cards (should never happen, but just in case)
+      if (newState.players[newState.currentPlayerIndex].hand.length >= 14) {
+        // Skip drawing and go straight to meld phase
+        newState.gamePhase = "meld";
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = null;
+        newState.cpuThinking = false;
+        return newState;
+      }
+
       if (newState.deck.length === 0) {
         // If deck is empty, shuffle the discard pile except the top card
         if (newState.discardPile.length <= 1) {
@@ -568,6 +583,16 @@ const LocalGame: React.FC = () => {
     setGameState((prev) => {
       if (!prev) return prev;
       const newState = { ...prev };
+
+      // Check if CPU already has 14 cards (should never happen, but just in case)
+      if (newState.players[newState.currentPlayerIndex].hand.length >= 14) {
+        // Skip drawing and go straight to meld phase
+        newState.gamePhase = "meld";
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = null;
+        newState.cpuThinking = false;
+        return newState;
+      }
 
       const card = newState.discardPile.pop()!;
       newState.players[newState.currentPlayerIndex].hand.push(card);
@@ -1244,22 +1269,21 @@ const LocalGame: React.FC = () => {
       return;
     }
 
-    // Check if player already has 15 cards (should be 14 before drawing)
-    if (currentPlayer.hand.length >= 15) {
+    // Check if player already has 14 cards (should not draw more)
+    if (currentPlayer.hand.length >= 14) {
       toast({
-        title: "Too many cards",
-        description:
-          "You already have the maximum number of cards. Please discard.",
+        title: "Maximum cards reached",
+        description: "You already have 14 cards. You must discard one card.",
         variant: "destructive",
       });
       setGameState((prev) => {
         if (!prev) return prev;
-        // Force move to meld phase if player somehow has too many cards
+        // Force move to meld phase
         return {
           ...prev,
           gamePhase: "meld",
-          drawnFromDiscard: false,
           drawnCard: null,
+          drawnFromDiscard: false,
         };
       });
       return;
@@ -1317,22 +1341,21 @@ const LocalGame: React.FC = () => {
       return;
     }
 
-    // Check if player already has 15 cards (should be 14 before drawing)
-    if (currentPlayer.hand.length >= 15) {
+    // Check if player already has 14 cards (should not draw more)
+    if (currentPlayer.hand.length >= 14) {
       toast({
-        title: "Too many cards",
-        description:
-          "You already have the maximum number of cards. Please discard.",
+        title: "Maximum cards reached",
+        description: "You already have 14 cards. You must discard one card.",
         variant: "destructive",
       });
       setGameState((prev) => {
         if (!prev) return prev;
-        // Force move to meld phase if player somehow has too many cards
+        // Force move to meld phase
         return {
           ...prev,
           gamePhase: "meld",
-          drawnFromDiscard: false,
           drawnCard: null,
+          drawnFromDiscard: false,
         };
       });
       return;
@@ -1662,10 +1685,28 @@ const LocalGame: React.FC = () => {
     // Deal exactly 14 cards to each player
     for (let p = 0; p < newState.players.length; p++) {
       newState.players[p].hand = []; // Ensure hand is empty
-      for (let i = 0; i < 14; i++) {
-        if (deck.length > 0) {
-          const card = deck.pop()!;
-          newState.players[p].hand.push(card);
+      for (let i = 0; i < 14 && deck.length > 0; i++) {
+        const card = deck.pop()!;
+        newState.players[p].hand.push(card);
+      }
+
+      // Double-check each player has exactly 14 cards
+      if (newState.players[p].hand.length !== 14) {
+        console.error(
+          `Round ${newState.currentRound}: Player ${p} has ${newState.players[p].hand.length} cards instead of 14`,
+        );
+        // If not enough cards in deck, take from players with more than 14
+        while (newState.players[p].hand.length < 14) {
+          let cardFound = false;
+          for (let otherP = 0; otherP < newState.players.length; otherP++) {
+            if (otherP !== p && newState.players[otherP].hand.length > 14) {
+              const card = newState.players[otherP].hand.pop()!;
+              newState.players[p].hand.push(card);
+              cardFound = true;
+              break;
+            }
+          }
+          if (!cardFound) break; // Can't find more cards
         }
       }
     }
@@ -1697,6 +1738,20 @@ const LocalGame: React.FC = () => {
     setShowSetup(true);
     setGameState(null);
   };
+
+  // Debug function to check card counts
+  useEffect(() => {
+    if (gameState && gameState.gamePhase !== "draw") {
+      // Check if any player has more than 14 cards
+      gameState.players.forEach((player, index) => {
+        if (player.hand.length > 14) {
+          console.warn(
+            `Player ${player.name} has ${player.hand.length} cards, which exceeds the maximum of 14.`,
+          );
+        }
+      });
+    }
+  }, [gameState?.currentPlayerIndex, gameState?.gamePhase]);
 
   return (
     <div

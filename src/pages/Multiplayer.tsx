@@ -123,11 +123,25 @@ const Multiplayer = () => {
             }
           });
         }
-      }, 2000); // Poll every 2 seconds
+      }, 1000); // Poll every 1 second for better responsiveness
 
       return () => clearInterval(pollInterval);
     }
   }, [gameId, gameSession, lastUpdateTime]);
+
+  // Force re-fetch when this player's ready status changes
+  useEffect(() => {
+    if (gameId && gameSession) {
+      const currentPlayer = gameSession.players.find((p) => p.id === playerId);
+      if (currentPlayer) {
+        getGameSession(gameId).then((updatedSession) => {
+          if (updatedSession) {
+            handleSessionUpdate(updatedSession);
+          }
+        });
+      }
+    }
+  }, [gameSession?.players.find((p) => p.id === playerId)?.isReady]);
 
   // Handle session updates (called when session changes)
   const handleSessionUpdate = (updatedSession: GameSession) => {
@@ -136,20 +150,24 @@ const Multiplayer = () => {
       // Store previous session state before updating
       const currentSession = gameSession;
 
+      // Force a deep copy to ensure reactivity
+      const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
+
       // Update session state
-      setGameSession(updatedSession);
-      setLastUpdateTime(updatedSession.lastUpdated);
+      setGameSession(sessionCopy);
+      setLastUpdateTime(sessionCopy.lastUpdated);
 
       // Log updated session for debugging
-      console.log("Session updated:", updatedSession);
+      console.log("Session updated:", sessionCopy);
+      console.log("Current players:", sessionCopy.players);
 
       // Handle player join notifications
       if (
         currentSession &&
-        updatedSession.players.length > currentSession.players.length
+        sessionCopy.players.length > currentSession.players.length
       ) {
         // Find new players
-        const newPlayers = updatedSession.players.filter(
+        const newPlayers = sessionCopy.players.filter(
           (p) => !currentSession.players.some((cp) => cp.id === p.id),
         );
 
@@ -164,7 +182,7 @@ const Multiplayer = () => {
 
       // Check if a player became ready
       if (currentSession) {
-        updatedSession.players.forEach((player) => {
+        sessionCopy.players.forEach((player) => {
           const previousPlayerState = currentSession.players.find(
             (p) => p.id === player.id,
           );
@@ -185,7 +203,7 @@ const Multiplayer = () => {
       if (
         currentSession &&
         currentSession.state === "waiting" &&
-        updatedSession.state === "playing"
+        sessionCopy.state === "playing"
       ) {
         toast({
           title: "Game started",
@@ -198,10 +216,10 @@ const Multiplayer = () => {
 
       // Auto-start game when all players are ready (for host only)
       if (
-        updatedSession.state === "waiting" &&
-        updatedSession.hostId === playerId &&
-        updatedSession.players.length >= 2 &&
-        updatedSession.players.every((p) => p.isReady) &&
+        sessionCopy.state === "waiting" &&
+        sessionCopy.hostId === playerId &&
+        sessionCopy.players.length >= 2 &&
+        sessionCopy.players.every((p) => p.isReady) &&
         !isCountingDown
       ) {
         // Start countdown to auto-start the game
@@ -399,11 +417,13 @@ const Multiplayer = () => {
       // Immediately update local state to provide feedback
       setGameSession((prev) => {
         if (!prev) return prev;
-        return {
+        const updated = {
           ...prev,
           state: "playing",
           lastUpdated: Date.now(),
         };
+        console.log("Starting game - local state update:", updated);
+        return updated;
       });
 
       // Force immediate UI update with a toast
@@ -412,26 +432,41 @@ const Multiplayer = () => {
         description: "The game is now starting...",
       });
 
-      // Then update the session in storage
+      // Update the session in storage
       const success = await startGameSession(gameSession.id, playerId);
+      console.log("Start game result:", success);
 
       if (success) {
         // Double-check that the game state was updated
         const updatedSession = await getGameSession(gameSession.id);
+        console.log("Session after start:", updatedSession);
+
         if (updatedSession && updatedSession.state !== "playing") {
+          console.log("Game state not updated correctly, forcing update");
+
           // If not updated, force an update again
           await startGameSession(gameSession.id, playerId);
 
           // And update local state one more time
           setGameSession((prev) => {
             if (!prev) return prev;
-            return {
+            const forced = {
               ...prev,
               state: "playing",
               lastUpdated: Date.now(),
             };
+            console.log("Forced game state update:", forced);
+            return forced;
           });
         }
+
+        // Force one final re-fetch to ensure everyone is in sync
+        setTimeout(async () => {
+          const finalCheck = await getGameSession(gameSession.id);
+          if (finalCheck) {
+            handleSessionUpdate(finalCheck);
+          }
+        }, 1000);
 
         toast({
           title: "Game started",
@@ -439,6 +474,7 @@ const Multiplayer = () => {
         });
       }
     } catch (error) {
+      console.error("Error starting game:", error);
       toast({
         title: "Error",
         description: "Failed to start the game",

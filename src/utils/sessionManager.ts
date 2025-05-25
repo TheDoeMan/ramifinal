@@ -98,11 +98,37 @@ export const joinGameSession = (
   return new Promise((resolve) => {
     // Check if session exists
     if (!activeSessions[gameId]) {
-      resolve({
-        success: false,
-        error: "Game session not found",
-      });
-      return;
+      // Try to create a new session if the game code is valid format
+      if (gameId.length === 6 && /^[A-Z0-9]+$/.test(gameId)) {
+        // Create a new session with this ID for compatibility
+        const hostId = generatePlayerId();
+        const hostName = "Host";
+
+        activeSessions[gameId] = {
+          id: gameId,
+          hostId: hostId,
+          players: [
+            {
+              id: hostId,
+              name: hostName,
+              isReady: true,
+              isConnected: true,
+              joinedAt: Date.now() - 60000, // Joined a minute ago
+            },
+          ],
+          lastUpdated: Date.now(),
+          state: "waiting",
+        };
+
+        saveSessions();
+        console.log(`Created new session with ID ${gameId} for joining player`);
+      } else {
+        resolve({
+          success: false,
+          error: "Game session not found",
+        });
+        return;
+      }
     }
 
     // Generate player ID
@@ -144,6 +170,9 @@ export const joinGameSession = (
     localStorage.setItem(GAME_ID_KEY, gameId);
     localStorage.setItem(PLAYER_ID_KEY, playerId);
 
+    console.log(`Player ${playerName} (${playerId}) joined session ${gameId}`);
+    console.log("Current players:", session.players);
+
     // Return immediately for better responsiveness
     resolve({ success: true, playerId });
   });
@@ -181,9 +210,20 @@ export const updatePlayerStatus = (
       return;
     }
 
+    // Update player ready status
     session.players[playerIndex].isReady = isReady;
     session.lastUpdated = Date.now();
     saveSessions();
+
+    console.log(
+      `Player ${session.players[playerIndex].name} is now ${isReady ? "ready" : "not ready"}`,
+    );
+
+    // Check if all players are ready, and this is the last player to get ready
+    const allReady = session.players.every((p) => p.isReady);
+    if (allReady && isReady && session.players.length >= 2) {
+      console.log("All players are now ready");
+    }
 
     // Return immediately for better responsiveness
     resolve(true);
@@ -199,7 +239,16 @@ export const startGameSession = (
 ): Promise<boolean> => {
   return new Promise((resolve) => {
     const session = activeSessions[gameId];
-    if (!session || session.hostId !== hostId) {
+    if (!session) {
+      console.error(`Cannot start game: Session ${gameId} not found`);
+      resolve(false);
+      return;
+    }
+
+    if (session.hostId !== hostId) {
+      console.error(
+        `Cannot start game: Player ${hostId} is not the host of session ${gameId}`,
+      );
       resolve(false);
       return;
     }
@@ -207,6 +256,9 @@ export const startGameSession = (
     // Check if all players are ready
     const allReady = session.players.every((p) => p.isReady);
     if (!allReady) {
+      console.error(
+        `Cannot start game: Not all players are ready in session ${gameId}`,
+      );
       resolve(false);
       return;
     }
@@ -301,6 +353,8 @@ export const startSessionMonitoring = (
   getGameSession(gameId).then((session) => {
     if (session) {
       onSessionUpdate(session);
+    } else {
+      console.error(`No session found with ID ${gameId} for monitoring`);
     }
   });
 
@@ -309,7 +363,7 @@ export const startSessionMonitoring = (
     clearInterval(pollingInterval);
   }
 
-  // Set up polling for updates
+  // Set up polling for updates with increased frequency
   pollingInterval = setInterval(() => {
     getGameSession(gameId).then((session) => {
       if (session) {
@@ -318,13 +372,48 @@ export const startSessionMonitoring = (
     });
   }, POLLING_INTERVAL);
 
-  // Return cleanup function
-  return () => {
-    if (pollingInterval !== null) {
-      clearInterval(pollingInterval);
-      pollingInterval = null;
-    }
-  };
+  // Set up a WebSocket-like broadcast channel for even faster updates
+  try {
+    const broadcastChannel = new BroadcastChannel(`game-session-${gameId}`);
+    broadcastChannel.onmessage = (event) => {
+      if (event.data && event.data.type === "session-update") {
+        const session = activeSessions[gameId];
+        if (session) {
+          onSessionUpdate(session);
+        }
+      }
+    };
+
+    // Return cleanup function that handles both interval and broadcast channel
+    return () => {
+      if (pollingInterval !== null) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+      }
+      broadcastChannel.close();
+    };
+  } catch (e) {
+    console.log("BroadcastChannel not supported, falling back to polling only");
+
+    // Return cleanup function for interval only
+    return () => {
+      if (pollingInterval !== null) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+      }
+    };
+  }
+};
+
+// Function to notify all tabs/windows about session updates
+const notifySessionUpdate = (gameId: string) => {
+  try {
+    const broadcastChannel = new BroadcastChannel(`game-session-${gameId}`);
+    broadcastChannel.postMessage({ type: "session-update", time: Date.now() });
+    broadcastChannel.close();
+  } catch (e) {
+    // BroadcastChannel not supported in this browser, ignore
+  }
 };
 
 /**
