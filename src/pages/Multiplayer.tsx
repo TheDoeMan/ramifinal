@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { GameCard, Suit, Rank } from "@/components/GameCard";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -15,6 +15,19 @@ import {
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, Copy, CheckCircle } from "lucide-react";
+import {
+  createGameSession,
+  joinGameSession,
+  getGameSession,
+  updatePlayerStatus,
+  leaveGameSession,
+  startGameSession,
+  simulatePlayerJoining,
+  startSessionMonitoring,
+  checkForExistingSession,
+  type GameSession,
+  type SessionPlayer,
+} from "@/utils/sessionManager";
 
 // Types for multiplayer game
 type Card = {
@@ -23,37 +36,6 @@ type Card = {
   rank: Rank;
   value: number;
   isJoker?: boolean;
-};
-
-type Meld = {
-  id: string;
-  cards: Card[];
-  type: "set" | "run";
-  playerId: string;
-};
-
-type Player = {
-  id: string;
-  name: string;
-  isReady: boolean;
-  isConnected: boolean;
-  hand: Card[];
-  points: number;
-  hasLaidInitial51: boolean;
-};
-
-type GameRoom = {
-  id: string;
-  host: string;
-  players: Player[];
-  state: "waiting" | "playing" | "ended";
-  currentPlayerIndex: number;
-  deck: Card[];
-  discardPile: Card[];
-  melds: Meld[];
-  winner: string | null;
-  roundScores: { [playerId: string]: number };
-  currentRound: number;
 };
 
 // Card values
@@ -73,122 +55,9 @@ const CARD_VALUES: Record<Rank, number> = {
   K: 10,
 };
 
-// Create two standard decks of cards plus jokers (108 cards total)
-const createDeck = (): Card[] => {
-  const suits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
-  const ranks: Rank[] = [
-    "A",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "10",
-    "J",
-    "Q",
-    "K",
-  ];
-  const deck: Card[] = [];
-
-  // Create 2 full decks
-  for (let d = 0; d < 2; d++) {
-    for (const suit of suits) {
-      for (const rank of ranks) {
-        deck.push({
-          id: `${rank}-${suit}-${d}`,
-          suit,
-          rank,
-          value: CARD_VALUES[rank],
-        });
-      }
-    }
-  }
-
-  // Add 4 jokers
-  for (let j = 0; j < 4; j++) {
-    deck.push({
-      id: `joker-${j}`,
-      suit: "hearts", // Default suit, will be visually different
-      rank: "A", // Default rank, will be visually different
-      value: 0, // Value will be determined by what it substitutes
-      isJoker: true,
-    });
-  }
-
-  return shuffleDeck(deck);
-};
-
-// Shuffle deck
-const shuffleDeck = (deck: Card[]): Card[] => {
-  const shuffled = [...deck];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-};
-
-// Generate a unique ID for the player
-const generatePlayerId = () => {
-  return `player_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-};
-
-// Generate a unique room code (6 characters)
-const generateRoomCode = () => {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Excluding characters that look similar
-  let result = "";
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-};
-
-// Session storage helpers
-const saveGameToSession = (gameRoom: GameRoom) => {
-  try {
-    sessionStorage.setItem(`game_${gameRoom.id}`, JSON.stringify(gameRoom));
-    // Also store the last active game ID
-    sessionStorage.setItem("lastActiveGame", gameRoom.id);
-  } catch (error) {
-    console.error("Error saving game to session storage:", error);
-  }
-};
-
-const getGameFromSession = (gameId: string): GameRoom | null => {
-  try {
-    const gameData = sessionStorage.getItem(`game_${gameId}`);
-    return gameData ? JSON.parse(gameData) : null;
-  } catch (error) {
-    console.error("Error retrieving game from session storage:", error);
-    return null;
-  }
-};
-
-const getAllGamesFromSession = (): GameRoom[] => {
-  try {
-    const games: GameRoom[] = [];
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const key = sessionStorage.key(i);
-      if (key && key.startsWith("game_")) {
-        const gameId = key.replace("game_", "");
-        const game = getGameFromSession(gameId);
-        if (game) {
-          games.push(game);
-        }
-      }
-    }
-    return games;
-  } catch (error) {
-    console.error("Error retrieving all games from session storage:", error);
-    return [];
-  }
-};
-
 const Multiplayer = () => {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [gameId, setGameId] = useState("");
   const [playerName, setPlayerName] = useState(() => {
     return localStorage.getItem("playerName") || "";
@@ -200,67 +69,111 @@ const Multiplayer = () => {
   const [copySuccess, setCopySuccess] = useState(false);
   const [connectionIssue, setConnectionIssue] = useState(false);
   const [playerId, setPlayerId] = useState<string>("");
-  const [gameRoom, setGameRoom] = useState<GameRoom | null>(null);
-  const [selectedCards, setSelectedCards] = useState<Card[]>([]);
-  const [selectedMeld, setSelectedMeld] = useState<Meld | null>(null);
+  const [gameSession, setGameSession] = useState<GameSession | null>(null);
   const [yourTurn, setYourTurn] = useState(false);
+  const [lastUpdateTime, setLastUpdateTime] = useState(0);
 
-  // Check for existing games on component mount
+  // Check for existing session on component mount
   useEffect(() => {
     // Save player name to localStorage when it changes
     if (playerName) {
       localStorage.setItem("playerName", playerName);
     }
 
-    // Check if there's a last active game in the session
-    const lastGameId = sessionStorage.getItem("lastActiveGame");
-    if (lastGameId) {
-      const lastGame = getGameFromSession(lastGameId);
-      if (lastGame) {
-        // Look for player ID in localStorage
-        const storedPlayerId = localStorage.getItem(`player_${lastGameId}`);
-        if (
-          storedPlayerId &&
-          lastGame.players.some((p) => p.id === storedPlayerId)
-        ) {
-          setPlayerId(storedPlayerId);
-          setGameRoom(lastGame);
-          setShowSetup(false);
-          setGameId(lastGameId);
+    // Check if there's a session to rejoin
+    const { gameId: existingGameId, playerId: existingPlayerId } =
+      checkForExistingSession();
 
-          // Set your turn based on current player index
-          const playerIndex = lastGame.players.findIndex(
-            (p) => p.id === storedPlayerId,
+    if (existingGameId && existingPlayerId) {
+      // Try to reconnect to existing session
+      getGameSession(existingGameId).then((session) => {
+        if (session) {
+          const playerExists = session.players.some(
+            (p) => p.id === existingPlayerId,
           );
-          setYourTurn(playerIndex === lastGame.currentPlayerIndex);
+
+          if (playerExists) {
+            setGameId(existingGameId);
+            setPlayerId(existingPlayerId);
+            setGameSession(session);
+            setShowSetup(false);
+
+            // Start monitoring for session updates
+            startSessionMonitoring(existingGameId, handleSessionUpdate);
+
+            toast({
+              title: "Session restored",
+              description: "Reconnected to your previous game session",
+            });
+          }
         }
-      }
+      });
     }
   }, []);
 
-  // Simulate a server update - update game state in session storage
-  useEffect(() => {
-    if (gameRoom) {
-      saveGameToSession(gameRoom);
+  // Handle session updates (called when session changes)
+  const handleSessionUpdate = (updatedSession: GameSession) => {
+    // Only update if it's actually a new update
+    if (updatedSession.lastUpdated > lastUpdateTime) {
+      setGameSession(updatedSession);
+      setLastUpdateTime(updatedSession.lastUpdated);
+
+      // Handle player join notifications
+      const currentSession = gameSession;
+
+      if (
+        currentSession &&
+        updatedSession.players.length > currentSession.players.length
+      ) {
+        // Find new players
+        const newPlayers = updatedSession.players.filter(
+          (p) => !currentSession.players.some((cp) => cp.id === p.id),
+        );
+
+        // Show notification for each new player
+        newPlayers.forEach((player) => {
+          toast({
+            title: "Player joined",
+            description: `${player.name} has joined the game`,
+          });
+        });
+      }
+
+      // Check if a player became ready
+      if (currentSession) {
+        updatedSession.players.forEach((player) => {
+          const previousPlayerState = currentSession.players.find(
+            (p) => p.id === player.id,
+          );
+          if (
+            previousPlayerState &&
+            !previousPlayerState.isReady &&
+            player.isReady
+          ) {
+            toast({
+              title: "Player ready",
+              description: `${player.name} is now ready`,
+            });
+          }
+        });
+      }
+
+      // Check if game state changed to playing
+      if (
+        currentSession &&
+        currentSession.state === "waiting" &&
+        updatedSession.state === "playing"
+      ) {
+        toast({
+          title: "Game started",
+          description: "The game is now starting!",
+        });
+      }
     }
-  }, [gameRoom]);
+  };
 
-  // Periodically simulate other player activity
-  useEffect(() => {
-    if (gameRoom && gameRoom.state === "playing") {
-      const interval = setInterval(() => {
-        // 20% chance of simulating player activity
-        if (Math.random() > 0.8) {
-          simulateOtherPlayerTurn();
-        }
-      }, 5000);
-
-      return () => clearInterval(interval);
-    }
-  }, [gameRoom]);
-
-  // Create a new game room
-  const handleCreateGame = () => {
+  // Create a new game
+  const handleCreateGame = async () => {
     if (!playerName.trim()) {
       toast({
         title: "Missing information",
@@ -272,64 +185,44 @@ const Multiplayer = () => {
 
     setIsCreating(true);
 
-    // Generate a new game code
-    const newGameId = generateRoomCode();
-    const newPlayerId = generatePlayerId();
+    try {
+      const { gameId: newGameId, playerId: newPlayerId } =
+        await createGameSession(playerName);
 
-    // Initial player data
-    const playerData: Player = {
-      id: newPlayerId,
-      name: playerName,
-      isReady: true,
-      isConnected: true,
-      hand: [],
-      points: 0,
-      hasLaidInitial51: false,
-    };
+      setGameId(newGameId);
+      setPlayerId(newPlayerId);
 
-    // Initial game room data
-    const gameRoomData: GameRoom = {
-      id: newGameId,
-      host: newPlayerId,
-      players: [playerData],
-      state: "waiting",
-      currentPlayerIndex: 0,
-      deck: [],
-      discardPile: [],
-      melds: [],
-      winner: null,
-      roundScores: {},
-      currentRound: 1,
-    };
+      // Get initial session state
+      const session = await getGameSession(newGameId);
+      setGameSession(session);
 
-    // Save player ID to localStorage for session resumption
-    localStorage.setItem(`player_${newGameId}`, newPlayerId);
+      // Start monitoring for session updates
+      startSessionMonitoring(newGameId, handleSessionUpdate);
 
-    // Save game to session storage
-    saveGameToSession(gameRoomData);
+      setShowSetup(false);
 
-    setPlayerId(newPlayerId);
-    setGameId(newGameId);
-    setGameRoom(gameRoomData);
-    setShowSetup(false);
-    setIsCreating(false);
+      toast({
+        title: "Game created",
+        description: `Share code ${newGameId} with friends to join`,
+      });
 
-    toast({
-      title: "Game created",
-      description: `Share code ${newGameId} with friends to join`,
-    });
-
-    // Simulate another player joining after a delay
-    setTimeout(() => {
-      if (Math.random() > 0.3) {
-        // 70% chance a player will join
-        simulatePlayerJoining();
-      }
-    }, 5000);
+      // Simulate another player joining after a delay (for demo purposes)
+      setTimeout(() => {
+        simulatePlayerJoining(newGameId);
+      }, 8000);
+    } catch (error) {
+      toast({
+        title: "Error creating game",
+        description: "There was a problem creating the game. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   // Join an existing game
-  const handleJoinGame = () => {
+  const handleJoinGame = async () => {
     if (!gameId.trim() || !playerName.trim()) {
       toast({
         title: "Missing information",
@@ -341,327 +234,146 @@ const Multiplayer = () => {
 
     setIsJoining(true);
 
-    // Check if game exists in session storage
-    const existingGame = getGameFromSession(gameId);
+    try {
+      const {
+        success,
+        playerId: newPlayerId,
+        error,
+      } = await joinGameSession(gameId, playerName);
 
-    if (!existingGame) {
-      // For demo purposes, create a simulated game if not found
-      const simulatedGameId = gameId;
-      const newPlayerId = generatePlayerId();
-
-      // Create a host player
-      const hostPlayer: Player = {
-        id: "host_" + Math.random().toString(36).substring(2, 9),
-        name: "Host Player",
-        isReady: true,
-        isConnected: true,
-        hand: [],
-        points: 0,
-        hasLaidInitial51: false,
-      };
-
-      // Add more players randomly
-      const existingPlayers: Player[] = [hostPlayer];
-      if (Math.random() > 0.5) {
-        existingPlayers.push({
-          id: "player_" + Math.random().toString(36).substring(2, 9),
-          name: "Random Player",
-          isReady: Math.random() > 0.5,
-          isConnected: true,
-          hand: [],
-          points: 0,
-          hasLaidInitial51: false,
+      if (!success) {
+        toast({
+          title: "Error joining game",
+          description: error || "Could not join the game",
+          variant: "destructive",
         });
+        setIsJoining(false);
+        return;
       }
 
-      // Add the joining player
-      const joinPlayer: Player = {
-        id: newPlayerId,
-        name: playerName,
-        isReady: false,
-        isConnected: true,
-        hand: [],
-        points: 0,
-        hasLaidInitial51: false,
-      };
-      existingPlayers.push(joinPlayer);
+      setPlayerId(newPlayerId!);
 
-      const newGameRoom: GameRoom = {
-        id: simulatedGameId,
-        host: hostPlayer.id,
-        players: existingPlayers,
-        state: "waiting",
-        currentPlayerIndex: 0,
-        deck: [],
-        discardPile: [],
-        melds: [],
-        winner: null,
-        roundScores: {},
-        currentRound: 1,
-      };
+      // Get session details
+      const session = await getGameSession(gameId);
+      setGameSession(session);
 
-      // Save player ID to localStorage for session resumption
-      localStorage.setItem(`player_${simulatedGameId}`, newPlayerId);
+      // Start monitoring for session updates
+      startSessionMonitoring(gameId, handleSessionUpdate);
 
-      // Save game to session storage
-      saveGameToSession(newGameRoom);
-
-      setPlayerId(newPlayerId);
-      setGameRoom(newGameRoom);
-      setIsJoining(false);
       setShowSetup(false);
 
       toast({
         title: "Joined game",
-        description: `You've joined game ${simulatedGameId}`,
+        description: `You've joined game ${gameId}`,
       });
-      return;
-    }
-
-    // If game exists, join it
-    if (existingGame.state === "playing") {
+    } catch (error) {
       toast({
-        title: "Game in progress",
-        description: "This game has already started. You cannot join it now.",
+        title: "Error joining game",
+        description: "There was a problem joining the game. Please try again.",
         variant: "destructive",
       });
+    } finally {
       setIsJoining(false);
-      return;
     }
-
-    // Check if game is full (max 4 players)
-    if (existingGame.players.length >= 4) {
-      toast({
-        title: "Game is full",
-        description: "This game already has the maximum number of players (4).",
-        variant: "destructive",
-      });
-      setIsJoining(false);
-      return;
-    }
-
-    // Generate player ID and add to game
-    const newPlayerId = generatePlayerId();
-    const playerData: Player = {
-      id: newPlayerId,
-      name: playerName,
-      isReady: false,
-      isConnected: true,
-      hand: [],
-      points: 0,
-      hasLaidInitial51: false,
-    };
-
-    // Add player to the game
-    existingGame.players.push(playerData);
-
-    // Save player ID to localStorage for session resumption
-    localStorage.setItem(`player_${gameId}`, newPlayerId);
-
-    // Save updated game to session storage
-    saveGameToSession(existingGame);
-
-    setPlayerId(newPlayerId);
-    setGameRoom(existingGame);
-    setIsJoining(false);
-    setShowSetup(false);
-
-    toast({
-      title: "Joined game",
-      description: `You've joined game ${gameId}`,
-    });
-  };
-
-  // Simulate another player joining
-  const simulatePlayerJoining = () => {
-    if (!gameRoom) return;
-
-    // Simulate a new player joining
-    const newPlayer: Player = {
-      id: "player_" + Math.random().toString(36).substring(2, 9),
-      name: "Player " + Math.floor(Math.random() * 100),
-      isReady: false,
-      isConnected: true,
-      hand: [],
-      points: 0,
-      hasLaidInitial51: false,
-    };
-
-    setGameRoom((prevRoom) => {
-      if (!prevRoom) return null;
-      const updatedRoom = {
-        ...prevRoom,
-        players: [...prevRoom.players, newPlayer],
-      };
-      saveGameToSession(updatedRoom);
-      return updatedRoom;
-    });
-
-    toast({
-      title: "Player joined",
-      description: `${newPlayer.name} has joined the game`,
-    });
-
-    // Simulate player ready after a delay
-    setTimeout(() => {
-      setGameRoom((prevRoom) => {
-        if (!prevRoom) return null;
-        const updatedPlayers = prevRoom.players.map((p) =>
-          p.id === newPlayer.id ? { ...p, isReady: true } : p,
-        );
-        const updatedRoom = {
-          ...prevRoom,
-          players: updatedPlayers,
-        };
-        saveGameToSession(updatedRoom);
-        return updatedRoom;
-      });
-    }, 3000);
   };
 
   // Toggle ready status
-  const toggleReady = () => {
-    if (!gameRoom || !playerId) return;
+  const handleToggleReady = async () => {
+    if (!gameSession || !playerId) return;
 
-    setGameRoom((prevRoom) => {
-      if (!prevRoom) return null;
+    const currentPlayer = gameSession.players.find((p) => p.id === playerId);
+    if (!currentPlayer) return;
 
-      // Find and update the player
-      const updatedPlayers = prevRoom.players.map((player) => {
-        if (player.id === playerId) {
-          return { ...player, isReady: !player.isReady };
-        }
-        return player;
-      });
+    try {
+      const success = await updatePlayerStatus(
+        gameSession.id,
+        playerId,
+        !currentPlayer.isReady,
+      );
 
-      const updatedRoom = {
-        ...prevRoom,
-        players: updatedPlayers,
-      };
+      if (success) {
+        // Local optimistic update
+        setGameSession((prev) => {
+          if (!prev) return prev;
 
-      saveGameToSession(updatedRoom);
-      return updatedRoom;
-    });
-
-    // Check if all players are ready and start game if host
-    setTimeout(() => {
-      if (gameRoom && playerId === gameRoom.host) {
-        const allReady = gameRoom.players.every((player) => player.isReady);
-        if (allReady && gameRoom.players.length >= 2) {
-          startGame();
-        }
+          return {
+            ...prev,
+            players: prev.players.map((p) =>
+              p.id === playerId ? { ...p, isReady: !p.isReady } : p,
+            ),
+            lastUpdated: Date.now(),
+          };
+        });
       }
-    }, 500);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update ready status",
+        variant: "destructive",
+      });
+    }
   };
 
   // Start the game (host only)
-  const startGame = () => {
-    if (!gameRoom || playerId !== gameRoom.host) return;
+  const handleStartGame = async () => {
+    if (!gameSession || playerId !== gameSession.hostId) return;
 
-    // Check if there are at least 2 players
-    if (gameRoom.players.length < 2) {
+    // Check if there are enough players
+    if (gameSession.players.length < 2) {
       toast({
         title: "Not enough players",
-        description: "You need at least 2 players to start the game.",
+        description: "You need at least 2 players to start the game",
         variant: "destructive",
       });
       return;
     }
 
     // Check if all players are ready
-    const allReady = gameRoom.players.every((player) => player.isReady);
+    const allReady = gameSession.players.every((player) => player.isReady);
     if (!allReady) {
       toast({
         title: "Players not ready",
-        description: "All players must be ready to start the game.",
+        description: "All players must be ready to start the game",
         variant: "destructive",
       });
       return;
     }
 
-    toast({
-      title: "Starting game",
-      description: "Dealing cards and setting up the game...",
-    });
+    try {
+      const success = await startGameSession(gameSession.id, playerId);
 
-    // Generate the deck and deal cards
-    const deck = createDeck();
-    const updatedPlayers = gameRoom.players.map((player) => {
-      const hand: Card[] = [];
-      // Deal 14 cards to each player
-      for (let i = 0; i < 14; i++) {
-        if (deck.length > 0) {
-          const card = deck.pop()!;
-          hand.push(card);
-        }
+      if (success) {
+        toast({
+          title: "Game started",
+          description: "The game has begun!",
+        });
+
+        // Local optimistic update
+        setGameSession((prev) => {
+          if (!prev) return prev;
+
+          return {
+            ...prev,
+            state: "playing",
+            lastUpdated: Date.now(),
+          };
+        });
       }
-      return { ...player, hand };
-    });
-
-    // Create initial discard pile with one card
-    const discardPile: Card[] = [];
-    if (deck.length > 0) {
-      discardPile.push(deck.pop()!);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to start the game",
+        variant: "destructive",
+      });
     }
-
-    // Update game state
-    setGameRoom((prevRoom) => {
-      if (!prevRoom) return null;
-
-      const updatedRoom = {
-        ...prevRoom,
-        state: "playing",
-        players: updatedPlayers,
-        deck,
-        discardPile,
-        currentPlayerIndex: 0,
-      };
-
-      saveGameToSession(updatedRoom);
-      return updatedRoom;
-    });
-
-    // If it's your turn, update state
-    if (playerId === gameRoom.players[0].id) {
-      setYourTurn(true);
-    }
-  };
-
-  // Simulate other player making a turn
-  const simulateOtherPlayerTurn = () => {
-    if (!gameRoom || gameRoom.state !== "playing") return;
-
-    // Only simulate if it's not your turn
-    if (!yourTurn) return;
-
-    setGameRoom((prevRoom) => {
-      if (!prevRoom) return null;
-
-      // Move to next player
-      const nextPlayerIndex =
-        (prevRoom.currentPlayerIndex + 1) % prevRoom.players.length;
-
-      const updatedRoom = {
-        ...prevRoom,
-        currentPlayerIndex: nextPlayerIndex,
-      };
-
-      saveGameToSession(updatedRoom);
-      return updatedRoom;
-    });
-
-    // If it's now your turn, update state
-    const nextPlayerIndex =
-      (gameRoom.currentPlayerIndex + 1) % gameRoom.players.length;
-    setYourTurn(gameRoom.players[nextPlayerIndex].id === playerId);
   };
 
   // Copy game code to clipboard
   const copyGameCode = () => {
-    if (!gameRoom) return;
+    if (!gameSession) return;
 
     navigator.clipboard
-      .writeText(gameRoom.id)
+      .writeText(gameSession.id)
       .then(() => {
         setCopySuccess(true);
         setTimeout(() => setCopySuccess(false), 2000);
@@ -680,49 +392,30 @@ const Multiplayer = () => {
       });
   };
 
-  // Leave the game and return to setup
-  const leaveGame = () => {
+  // Leave the game
+  const handleLeaveGame = async () => {
+    if (!gameSession || !playerId) return;
+
     // Confirm before leaving
     if (window.confirm("Are you sure you want to leave this game?")) {
-      if (gameRoom) {
-        // Remove player from the game
-        const updatedPlayers = gameRoom.players.filter(
-          (p) => p.id !== playerId,
-        );
+      try {
+        await leaveGameSession(gameSession.id, playerId);
 
-        // If this is the last player, remove the game
-        if (updatedPlayers.length === 0) {
-          sessionStorage.removeItem(`game_${gameRoom.id}`);
-        } else {
-          // If host is leaving, transfer host status
-          let updatedHost = gameRoom.host;
-          if (playerId === gameRoom.host && updatedPlayers.length > 0) {
-            updatedHost = updatedPlayers[0].id;
-          }
+        setGameSession(null);
+        setPlayerId("");
+        setShowSetup(true);
 
-          const updatedRoom = {
-            ...gameRoom,
-            players: updatedPlayers,
-            host: updatedHost,
-          };
-
-          saveGameToSession(updatedRoom);
-        }
-
-        // Remove player ID from localStorage
-        localStorage.removeItem(`player_${gameRoom.id}`);
+        toast({
+          title: "Left game",
+          description: "You've left the multiplayer game",
+        });
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: "Failed to leave the game",
+          variant: "destructive",
+        });
       }
-
-      setGameRoom(null);
-      setPlayerId("");
-      setShowSetup(true);
-      setSelectedCards([]);
-      setSelectedMeld(null);
-
-      toast({
-        title: "Left game",
-        description: "You've left the multiplayer game",
-      });
     }
   };
 
@@ -826,7 +519,7 @@ const Multiplayer = () => {
                 <Button
                   variant="outline"
                   onClick={() => setShowRules(true)}
-                  className="text-white bg-white/10 border-white/20 hover:bg-white/20 hover:text-white"
+                  className="text-white bg-black/50 border-white/30 hover:bg-black/70"
                 >
                   Game Rules
                 </Button>
@@ -851,7 +544,7 @@ const Multiplayer = () => {
     );
   }
 
-  // If in game, show the game lobby or game interface
+  // If in game room, show the lobby or game interface
   return (
     <div
       className="min-h-screen bg-brown-900 flex flex-col p-4 text-white"
@@ -875,7 +568,7 @@ const Multiplayer = () => {
           </Button>
           <Button
             variant="outline"
-            onClick={leaveGame}
+            onClick={handleLeaveGame}
             className="bg-black/50 text-white border-white/30 hover:bg-black/70"
           >
             Leave Game
@@ -901,13 +594,13 @@ const Multiplayer = () => {
             <div className="text-white/70 text-sm">Game Code:</div>
             <div className="flex items-center gap-2">
               <span className="font-mono text-xl font-bold">
-                {gameRoom?.id}
+                {gameSession?.id}
               </span>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={copyGameCode}
-                className="text-white bg-white/10 border-white/20 h-8"
+                className="bg-white/10 text-white border-white/20 h-8"
               >
                 {copySuccess ? (
                   <CheckCircle className="h-4 w-4 mr-1" />
@@ -919,23 +612,24 @@ const Multiplayer = () => {
             </div>
           </div>
 
-          {gameRoom?.state === "waiting" && playerId === gameRoom.host && (
-            <Button
-              onClick={startGame}
-              disabled={
-                gameRoom.players.length < 2 ||
-                !gameRoom.players.every((p) => p.isReady)
-              }
-              className="mt-2 md:mt-0"
-            >
-              Start Game
-            </Button>
-          )}
+          {gameSession?.state === "waiting" &&
+            playerId === gameSession.hostId && (
+              <Button
+                onClick={handleStartGame}
+                className="mt-2 md:mt-0"
+                disabled={
+                  gameSession.players.length < 2 ||
+                  !gameSession.players.every((p) => p.isReady)
+                }
+              >
+                Start Game
+              </Button>
+            )}
         </div>
       </div>
 
       {/* Game state: waiting for players */}
-      {gameRoom?.state === "waiting" && (
+      {gameSession?.state === "waiting" && (
         <div className="flex-grow bg-black/30 backdrop-blur-md rounded-xl p-6">
           <h2 className="text-2xl font-semibold mb-6 text-center">
             Waiting for Players
@@ -945,44 +639,43 @@ const Multiplayer = () => {
             <div className="bg-black/20 rounded-lg p-4 mb-6">
               <h3 className="text-lg font-medium mb-4">Players</h3>
               <div className="space-y-3">
-                {gameRoom &&
-                  gameRoom.players.map((player) => (
-                    <div
-                      key={player.id}
-                      className="flex justify-between items-center bg-black/20 p-3 rounded-md"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-3 h-3 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
-                        ></div>
-                        <span className="font-medium">{player.name}</span>
-                        {player.id === gameRoom.host && (
-                          <Badge className="bg-amber-600">Host</Badge>
-                        )}
-                        {player.id === playerId && (
-                          <Badge className="bg-blue-600">You</Badge>
-                        )}
-                      </div>
-                      <div>
-                        {player.isReady ? (
-                          <Badge className="bg-green-600">Ready</Badge>
-                        ) : (
-                          <Badge className="bg-slate-600">Not Ready</Badge>
-                        )}
-                      </div>
+                {gameSession.players.map((player) => (
+                  <div
+                    key={player.id}
+                    className="flex justify-between items-center bg-black/20 p-3 rounded-md"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-3 h-3 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
+                      ></div>
+                      <span className="font-medium">{player.name}</span>
+                      {player.id === gameSession.hostId && (
+                        <Badge className="bg-amber-600">Host</Badge>
+                      )}
+                      {player.id === playerId && (
+                        <Badge className="bg-blue-600">You</Badge>
+                      )}
                     </div>
-                  ))}
+                    <div>
+                      {player.isReady ? (
+                        <Badge className="bg-green-600">Ready</Badge>
+                      ) : (
+                        <Badge className="bg-slate-600">Not Ready</Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
             <div className="text-center">
-              {gameRoom && gameRoom.players.length < 2 ? (
+              {gameSession.players.length < 2 ? (
                 <div className="text-amber-300 mb-4">
                   Waiting for at least one more player to join...
                 </div>
               ) : (
                 <>
-                  {gameRoom && !gameRoom.players.every((p) => p.isReady) ? (
+                  {!gameSession.players.every((p) => p.isReady) ? (
                     <div className="text-amber-300 mb-4">
                       Waiting for all players to be ready...
                     </div>
@@ -994,11 +687,9 @@ const Multiplayer = () => {
                 </>
               )}
 
-              {gameRoom &&
-              playerId &&
-              gameRoom.players.find((p) => p.id === playerId)?.isReady ? (
+              {gameSession.players.find((p) => p.id === playerId)?.isReady ? (
                 <Button
-                  onClick={toggleReady}
+                  onClick={handleToggleReady}
                   variant="outline"
                   className="text-white bg-red-600/70 hover:bg-red-700 border-red-500"
                 >
@@ -1006,7 +697,7 @@ const Multiplayer = () => {
                 </Button>
               ) : (
                 <Button
-                  onClick={toggleReady}
+                  onClick={handleToggleReady}
                   variant="outline"
                   className="text-white bg-green-600/70 hover:bg-green-700 border-green-500"
                 >
@@ -1019,122 +710,120 @@ const Multiplayer = () => {
       )}
 
       {/* Game state: playing */}
-      {gameRoom?.state === "playing" && (
+      {gameSession?.state === "playing" && (
         <div className="flex-grow bg-black/30 backdrop-blur-md rounded-xl p-6">
           <div className="text-center mb-6">
-            <h2 className="text-xl font-semibold">
-              {yourTurn ? "Your Turn" : `Waiting for other player's turn...`}
-            </h2>
+            <h2 className="text-xl font-semibold">Game in Progress</h2>
 
-            {yourTurn ? (
-              <div className="flex justify-center mt-2 gap-2">
-                <Button disabled={!yourTurn}>Draw Card</Button>
-                <Button disabled={!yourTurn}>Discard</Button>
-              </div>
-            ) : (
-              <div className="animate-pulse text-amber-300 mt-2">
-                Other player is making their move...
-              </div>
-            )}
+            <div className="animate-pulse text-amber-300 mt-2">
+              Game has started! This would normally show the game board.
+            </div>
           </div>
 
           <div className="bg-black/20 rounded-lg p-4 mb-6">
             <h3 className="text-lg font-medium mb-3">Players</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {gameRoom &&
-                gameRoom.players.map((player) => (
-                  <div
-                    key={player.id}
-                    className={`${player.id === gameRoom.players[gameRoom.currentPlayerIndex].id ? "bg-amber-900/40 border-amber-500" : "bg-black/30"} p-3 rounded-md border border-white/10`}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <div
-                        className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
-                      ></div>
-                      <span className="font-medium">{player.name}</span>
-                      {player.id === playerId && (
-                        <Badge className="bg-blue-600 text-xs">You</Badge>
-                      )}
-                    </div>
-                    <div className="text-sm text-white/70">
-                      Cards:{" "}
-                      {player.id === playerId ? player.hand?.length || 0 : "?"}
-                    </div>
-                    <div className="text-sm text-white/70">
-                      Points: {player.points}
-                    </div>
+              {gameSession.players.map((player) => (
+                <div
+                  key={player.id}
+                  className={`bg-black/30 p-3 rounded-md border ${player.id === playerId ? "border-blue-500" : "border-white/10"}`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <div
+                      className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
+                    ></div>
+                    <span className="font-medium">{player.name}</span>
+                    {player.id === playerId && (
+                      <Badge className="bg-blue-600 text-xs">You</Badge>
+                    )}
                   </div>
-                ))}
+                  <div className="text-sm text-white/70">Status: Ready</div>
+                  <div className="text-sm text-white/70">Points: 0</div>
+                </div>
+              ))}
             </div>
           </div>
 
-          {gameRoom &&
-            playerId &&
-            gameRoom.players.find((p) => p.id === playerId)?.hand && (
-              <div className="bg-black/20 rounded-lg p-4 mt-8">
-                <div className="flex justify-between items-center mb-3">
-                  <h3 className="text-lg font-medium">Your Hand</h3>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="bg-black/50 text-white border-white/30 hover:bg-black/70"
-                    onClick={() => {
-                      // Simulate card organization
-                      toast({
-                        title: "Cards organized",
-                        description:
-                          "Your hand has been sorted by suit and rank",
-                      });
-                    }}
+          <div className="bg-black/20 rounded-lg p-4 mt-8">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-lg font-medium">Your Hand</h3>
+              <Button
+                size="sm"
+                variant="outline"
+                className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+                onClick={() => {
+                  toast({
+                    title: "Cards organized",
+                    description: "Your hand has been sorted by suit and rank",
+                  });
+                }}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mr-1"
+                >
+                  <line x1="21" x2="14" y1="4" y2="4"></line>
+                  <line x1="10" x2="3" y1="4" y2="4"></line>
+                  <line x1="21" x2="12" y1="12" y2="12"></line>
+                  <line x1="8" x2="3" y1="12" y2="12"></line>
+                  <line x1="21" x2="16" y1="20" y2="20"></line>
+                  <line x1="12" x2="3" y1="20" y2="20"></line>
+                  <line x1="14" x2="14" y1="2" y2="6"></line>
+                  <line x1="8" x2="8" y1="10" y2="14"></line>
+                  <line x1="16" x2="16" y1="18" y2="22"></line>
+                </svg>
+                Organize Cards
+              </Button>
+            </div>
+            <div className="flex justify-center">
+              <div className="flex gap-1 flex-wrap justify-center">
+                {/* Demo cards for visualization */}
+                {Array.from({ length: 14 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="flex-shrink-0"
+                    style={{ margin: "-10px 2px" }}
                   >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="mr-1"
-                    >
-                      <line x1="21" x2="14" y1="4" y2="4"></line>
-                      <line x1="10" x2="3" y1="4" y2="4"></line>
-                      <line x1="21" x2="12" y1="12" y2="12"></line>
-                      <line x1="8" x2="3" y1="12" y2="12"></line>
-                      <line x1="21" x2="16" y1="20" y2="20"></line>
-                      <line x1="12" x2="3" y1="20" y2="20"></line>
-                      <line x1="14" x2="14" y1="2" y2="6"></line>
-                      <line x1="8" x2="8" y1="10" y2="14"></line>
-                      <line x1="16" x2="16" y1="18" y2="22"></line>
-                    </svg>
-                    Organize Cards
-                  </Button>
-                </div>
-                <div className="flex justify-center">
-                  <div className="flex gap-1 flex-wrap justify-center">
-                    {gameRoom.players
-                      .find((p) => p.id === playerId)
-                      ?.hand.map((card, index) => (
-                        <div
-                          key={card.id || index}
-                          className="flex-shrink-0"
-                          style={{ margin: "-10px 2px" }}
-                        >
-                          <GameCard
-                            suit={card.suit}
-                            rank={card.rank}
-                            faceUp={true}
-                            isJoker={card.isJoker}
-                            style={{ width: "70px", height: "98px" }}
-                          />
-                        </div>
-                      ))}
+                    <GameCard
+                      suit={
+                        ["hearts", "diamonds", "clubs", "spades"][
+                          index % 4
+                        ] as Suit
+                      }
+                      rank={
+                        [
+                          "A",
+                          "2",
+                          "3",
+                          "4",
+                          "5",
+                          "6",
+                          "7",
+                          "8",
+                          "9",
+                          "10",
+                          "J",
+                          "Q",
+                          "K",
+                        ][index % 13] as Rank
+                      }
+                      faceUp={true}
+                      isJoker={index === 7}
+                      style={{ width: "70px", height: "98px" }}
+                    />
                   </div>
-                </div>
+                ))}
               </div>
-            )}
+            </div>
+          </div>
         </div>
       )}
 
