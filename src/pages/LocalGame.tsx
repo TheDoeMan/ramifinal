@@ -11,6 +11,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 
 // Define card types
 type Card = {
@@ -18,6 +26,7 @@ type Card = {
   suit: Suit;
   rank: Rank;
   value: number;
+  isJoker?: boolean;
 };
 
 // Define a set or run
@@ -34,7 +43,7 @@ type Player = {
   name: string;
   hand: Card[];
   points: number;
-  hasMelded: boolean;
+  hasLaidInitial51: boolean;
   meldPoints: number;
 };
 
@@ -49,6 +58,9 @@ type GameState = {
   winner: string | null;
   roundScores: { [playerId: string]: number };
   currentRound: number;
+  drawnFromDiscard: boolean;
+  drawnCard: Card | null;
+  cleanWinPossible: boolean;
 };
 
 // Card values
@@ -71,7 +83,7 @@ const CARD_VALUES: Record<Rank, number> = {
 // Required points for the first meld
 const FIRST_MELD_POINTS = 51;
 
-// Create a standard deck of cards
+// Create two standard decks of cards plus jokers (108 cards total)
 const createDeck = (): Card[] => {
   const suits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
   const ranks: Rank[] = [
@@ -91,15 +103,29 @@ const createDeck = (): Card[] => {
   ];
   const deck: Card[] = [];
 
-  for (const suit of suits) {
-    for (const rank of ranks) {
-      deck.push({
-        id: `${rank}-${suit}`,
-        suit,
-        rank,
-        value: CARD_VALUES[rank],
-      });
+  // Create 2 full decks
+  for (let d = 0; d < 2; d++) {
+    for (const suit of suits) {
+      for (const rank of ranks) {
+        deck.push({
+          id: `${rank}-${suit}-${d}`,
+          suit,
+          rank,
+          value: CARD_VALUES[rank],
+        });
+      }
     }
+  }
+
+  // Add 4 jokers
+  for (let j = 0; j < 4; j++) {
+    deck.push({
+      id: `joker-${j}`,
+      suit: "hearts", // Default suit, will be visually different
+      rank: "A", // Default rank, will be visually different
+      value: 0, // Value will be determined by what it substitutes
+      isJoker: true,
+    });
   }
 
   return shuffleDeck(deck);
@@ -117,16 +143,38 @@ const shuffleDeck = (deck: Card[]): Card[] => {
 
 // Calculate total points in a set of cards
 const calculatePoints = (cards: Card[]): number => {
-  return cards.reduce((total, card) => total + card.value, 0);
+  return cards.reduce((total, card) => {
+    // For jokers, use the value of the card it substitutes
+    if (card.isJoker) {
+      // In a set, use the rank of other cards
+      if (cards.some((c) => !c.isJoker)) {
+        const nonJokerCard = cards.find((c) => !c.isJoker);
+        return total + CARD_VALUES[nonJokerCard!.rank];
+      }
+      // Default to 1 if it's a joker with no context
+      return total + 1;
+    }
+    return total + card.value;
+  }, 0);
 };
 
 // Check if cards form a valid set (same rank, different suits)
 const isValidSet = (cards: Card[]): boolean => {
   if (cards.length < 3) return false;
-  const rank = cards[0].rank;
+
+  // Count jokers
+  const jokers = cards.filter((c) => c.isJoker);
+  if (jokers.length > 1) return false; // Max 1 joker per meld
+
+  const nonJokerCards = cards.filter((c) => !c.isJoker);
+
+  // If there are no non-joker cards, it's not valid
+  if (nonJokerCards.length === 0) return false;
+
+  const rank = nonJokerCards[0].rank;
   const suits = new Set<Suit>();
 
-  for (const card of cards) {
+  for (const card of nonJokerCards) {
     if (card.rank !== rank) return false;
     if (suits.has(card.suit)) return false;
     suits.add(card.suit);
@@ -139,37 +187,76 @@ const isValidSet = (cards: Card[]): boolean => {
 const isValidRun = (cards: Card[]): boolean => {
   if (cards.length < 3) return false;
 
+  // Count jokers
+  const jokers = cards.filter((c) => c.isJoker);
+  if (jokers.length > 1) return false; // Max 1 joker per meld
+
+  const nonJokerCards = cards.filter((c) => !c.isJoker);
+
+  // If there are no non-joker cards, it's not valid
+  if (nonJokerCards.length === 0) return false;
+
   // Sort cards by value
-  const sortedCards = [...cards].sort((a, b) => a.value - b.value);
+  const sortedCards = [...nonJokerCards].sort((a, b) => a.value - b.value);
   const suit = sortedCards[0].suit;
 
   // Check if all cards have the same suit
   if (!sortedCards.every((card) => card.suit === suit)) return false;
 
-  // Check if ranks are consecutive
-  for (let i = 1; i < sortedCards.length; i++) {
-    if (sortedCards[i].value !== sortedCards[i - 1].value + 1) {
-      return false;
+  // If there's a joker, we need to find where it fits
+  if (jokers.length === 1) {
+    // Check for gaps in the sequence
+    for (let i = 1; i < sortedCards.length; i++) {
+      if (sortedCards[i].value > sortedCards[i - 1].value + 1) {
+        // If the gap is exactly 1 card, the joker can fill it
+        if (sortedCards[i].value === sortedCards[i - 1].value + 2) {
+          // We found where the joker goes, sequence is valid
+          return true;
+        }
+        return false; // Gap too large for one joker
+      }
     }
-  }
 
-  return true;
+    // No gaps found, joker can go at beginning or end
+    return true;
+  } else {
+    // No jokers, check if ranks are consecutive
+    for (let i = 1; i < sortedCards.length; i++) {
+      if (sortedCards[i].value !== sortedCards[i - 1].value + 1) {
+        return false;
+      }
+    }
+    return true;
+  }
 };
 
 // Check if a player can add to an existing meld
 const canAddToMeld = (meld: Meld, card: Card): boolean => {
+  // Count jokers in the meld
+  const jokersInMeld = meld.cards.filter((c) => c.isJoker).length;
+
+  // If the card is a joker and there's already a joker, can't add
+  if (card.isJoker && jokersInMeld > 0) return false;
+
   if (meld.type === "set") {
     // Can add to a set if the card has the same rank but different suit
+    const rank = meld.cards.find((c) => !c.isJoker)?.rank;
     return (
-      card.rank === meld.cards[0].rank &&
-      !meld.cards.some((c) => c.suit === card.suit)
+      (card.rank === rank || card.isJoker) &&
+      !meld.cards.some((c) => c.suit === card.suit && c.rank === card.rank)
     );
   } else if (meld.type === "run") {
     // Can add to a run if the card is consecutive and same suit
-    const suit = meld.cards[0].suit;
+    if (card.isJoker) return true; // Joker can be added to any run
+
+    const suit = meld.cards.find((c) => !c.isJoker)?.suit;
     if (card.suit !== suit) return false;
 
-    const values = meld.cards.map((c) => c.value).sort((a, b) => a - b);
+    const values = meld.cards
+      .filter((c) => !c.isJoker)
+      .map((c) => c.value)
+      .sort((a, b) => a - b);
+
     const minValue = values[0];
     const maxValue = values[values.length - 1];
 
@@ -184,30 +271,29 @@ const LocalGame: React.FC = () => {
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
   const [selectedMeld, setSelectedMeld] = useState<Meld | null>(null);
   const [showRules, setShowRules] = useState(false);
-  const [gameState, setGameState] = useState<GameState>(() => {
+  const [showSetup, setShowSetup] = useState(true);
+  const [numPlayers, setNumPlayers] = useState<string>("2");
+  const [gameState, setGameState] = useState<GameState | null>(null);
+
+  const startGame = (playerCount: number) => {
     // Initialize game state
     const deck = createDeck();
-    const players: Player[] = [
-      {
-        id: "player1",
-        name: "Player 1",
-        hand: [],
-        points: 0,
-        hasMelded: false,
-        meldPoints: 0,
-      },
-      {
-        id: "player2",
-        name: "Player 2",
-        hand: [],
-        points: 0,
-        hasMelded: false,
-        meldPoints: 0,
-      },
-    ];
+    const players: Player[] = [];
 
-    // Deal 10 cards to each player
-    for (let i = 0; i < 10; i++) {
+    // Create players
+    for (let i = 0; i < playerCount; i++) {
+      players.push({
+        id: `player${i + 1}`,
+        name: `Player ${i + 1}`,
+        hand: [],
+        points: 0,
+        hasLaidInitial51: false,
+        meldPoints: 0,
+      });
+    }
+
+    // Deal 14 cards to each player
+    for (let i = 0; i < 14; i++) {
       for (let p = 0; p < players.length; p++) {
         if (deck.length > 0) {
           const card = deck.pop()!;
@@ -222,7 +308,7 @@ const LocalGame: React.FC = () => {
       discardPile.push(deck.pop()!);
     }
 
-    return {
+    setGameState({
       deck,
       players,
       currentPlayerIndex: 0,
@@ -232,8 +318,80 @@ const LocalGame: React.FC = () => {
       winner: null,
       roundScores: {},
       currentRound: 1,
-    };
-  });
+      drawnFromDiscard: false,
+      drawnCard: null,
+      cleanWinPossible: true, // At the start of the game, a clean win is possible
+    });
+
+    setShowSetup(false);
+  };
+
+  // If game state is null, return early
+  if (!gameState) {
+    return (
+      <div className="min-h-screen bg-brown-900 flex items-center justify-center p-4 text-white">
+        <div className="w-full max-w-md">
+          <div className="bg-black/20 backdrop-blur-md rounded-xl p-8 border border-white/10 shadow-2xl">
+            <h1 className="text-3xl font-bold text-white mb-6 text-shadow">
+              Tunisian Rami
+            </h1>
+
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="numPlayers" className="text-white">
+                  Number of Players
+                </Label>
+                <Select value={numPlayers} onValueChange={setNumPlayers}>
+                  <SelectTrigger className="bg-white/10 border-white/20 text-white">
+                    <SelectValue placeholder="Select number of players" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="2">2 Players</SelectItem>
+                    <SelectItem value="3">3 Players</SelectItem>
+                    <SelectItem value="4">4 Players</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Button
+                onClick={() => startGame(parseInt(numPlayers))}
+                className="w-full"
+              >
+                Start Game
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={() => setShowRules(true)}
+                className="w-full"
+              >
+                View Rules
+              </Button>
+
+              <Link to="/" className="block w-full">
+                <Button variant="outline" className="w-full">
+                  Back to Menu
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* Rules dialog */}
+        <Dialog open={showRules} onOpenChange={setShowRules}>
+          <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Tunisian Rami Rules</DialogTitle>
+              <DialogDescription>
+                Learn how to play the traditional Tunisian Rami card game
+              </DialogDescription>
+            </DialogHeader>
+            <RulesContent />
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
 
   const currentPlayer = gameState.players[gameState.currentPlayerIndex];
 
@@ -273,7 +431,7 @@ const LocalGame: React.FC = () => {
     if (gameState.gamePhase !== "meld") return;
 
     // Can only add to your own melds before first meld
-    if (!currentPlayer.hasMelded && meld.playerId !== currentPlayer.id) {
+    if (!currentPlayer.hasLaidInitial51 && meld.playerId !== currentPlayer.id) {
       toast({
         title: "Cannot modify opponent's melds",
         description:
@@ -295,7 +453,20 @@ const LocalGame: React.FC = () => {
   const addCardToMeld = (meld: Meld, card: Card) => {
     if (gameState.gamePhase !== "meld") return;
 
+    // If card was drawn from discard, check if it's being used
+    if (gameState.drawnFromDiscard && gameState.drawnCard?.id === card.id) {
+      // Card is being used in a meld as required
+    } else if (gameState.drawnFromDiscard && !currentPlayer.hasLaidInitial51) {
+      toast({
+        title: "Must use discard card",
+        description: "You must use the card drawn from discard pile in a meld.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setGameState((prev) => {
+      if (!prev) return prev;
       const newState = { ...prev };
 
       // Find the meld to update
@@ -308,15 +479,22 @@ const LocalGame: React.FC = () => {
         (c) => c.id !== card.id,
       );
 
+      // If this is the card drawn from discard, mark it as used
+      if (newState.drawnFromDiscard && newState.drawnCard?.id === card.id) {
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = null;
+      }
+
       // Add card to the meld
       if (newState.melds[meldIndex].type === "run") {
         // For runs, we need to maintain order
         const values = [...newState.melds[meldIndex].cards, card]
+          .filter((c) => !c.isJoker)
           .map((c) => c.value)
           .sort((a, b) => a - b);
 
         const cardValue = card.value;
-        if (cardValue < values[1]) {
+        if (!card.isJoker && cardValue < values[1]) {
           // Add to beginning
           newState.melds[meldIndex].cards.unshift(card);
         } else {
@@ -327,6 +505,9 @@ const LocalGame: React.FC = () => {
         // For sets, just add the card
         newState.melds[meldIndex].cards.push(card);
       }
+
+      // A clean win is no longer possible if player adds to existing melds
+      newState.cleanWinPossible = false;
 
       return newState;
     });
@@ -358,6 +539,7 @@ const LocalGame: React.FC = () => {
       }
 
       setGameState((prev) => {
+        if (!prev) return prev;
         const newState = { ...prev };
         const topCard = newState.discardPile.pop()!;
         newState.deck = shuffleDeck(newState.discardPile);
@@ -366,15 +548,20 @@ const LocalGame: React.FC = () => {
         const card = newState.deck.pop()!;
         newState.players[newState.currentPlayerIndex].hand.push(card);
         newState.gamePhase = "meld";
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = card;
 
         return newState;
       });
     } else {
       setGameState((prev) => {
+        if (!prev) return prev;
         const newState = { ...prev };
         const card = newState.deck.pop()!;
         newState.players[newState.currentPlayerIndex].hand.push(card);
         newState.gamePhase = "meld";
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = card;
         return newState;
       });
     }
@@ -401,11 +588,19 @@ const LocalGame: React.FC = () => {
     }
 
     setGameState((prev) => {
+      if (!prev) return prev;
       const newState = { ...prev };
       const card = newState.discardPile.pop()!;
       newState.players[newState.currentPlayerIndex].hand.push(card);
       newState.gamePhase = "meld";
+      newState.drawnFromDiscard = true;
+      newState.drawnCard = card;
       return newState;
+    });
+
+    toast({
+      title: "Discard card drawn",
+      description: "You must use this card in a meld immediately.",
     });
   };
 
@@ -429,6 +624,22 @@ const LocalGame: React.FC = () => {
       return;
     }
 
+    // Check if discard card is being used if drawn from discard
+    if (gameState.drawnFromDiscard) {
+      const drawnCardInSelection = selectedCards.some(
+        (c) => c.id === gameState.drawnCard?.id,
+      );
+      if (!drawnCardInSelection) {
+        toast({
+          title: "Must use discard card",
+          description:
+            "You must use the card drawn from discard pile in a meld.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     let meldType: "set" | "run" | null = null;
 
     if (isValidSet(selectedCards)) {
@@ -450,7 +661,7 @@ const LocalGame: React.FC = () => {
     const pointsInMeld = calculatePoints(selectedCards);
     const player = gameState.players[gameState.currentPlayerIndex];
 
-    if (!player.hasMelded && pointsInMeld < FIRST_MELD_POINTS) {
+    if (!player.hasLaidInitial51 && pointsInMeld < FIRST_MELD_POINTS) {
       toast({
         title: "First meld requirements not met",
         description: `Your first meld must be at least ${FIRST_MELD_POINTS} points. This meld is only ${pointsInMeld} points.`,
@@ -460,6 +671,7 @@ const LocalGame: React.FC = () => {
     }
 
     setGameState((prev) => {
+      if (!prev) return prev;
       const newState = { ...prev };
 
       // Remove cards from player's hand
@@ -468,9 +680,20 @@ const LocalGame: React.FC = () => {
         (card) => !selectedCards.some((c) => c.id === card.id),
       );
 
+      // If card was drawn from discard, mark it as used
+      if (newState.drawnFromDiscard) {
+        const drawnCardUsed = selectedCards.some(
+          (c) => c.id === newState.drawnCard?.id,
+        );
+        if (drawnCardUsed) {
+          newState.drawnFromDiscard = false;
+          newState.drawnCard = null;
+        }
+      }
+
       // Update player's meld status if this is their first meld
-      if (!newState.players[newState.currentPlayerIndex].hasMelded) {
-        newState.players[newState.currentPlayerIndex].hasMelded = true;
+      if (!newState.players[newState.currentPlayerIndex].hasLaidInitial51) {
+        newState.players[newState.currentPlayerIndex].hasLaidInitial51 = true;
         newState.players[newState.currentPlayerIndex].meldPoints = pointsInMeld;
       }
 
@@ -508,9 +731,27 @@ const LocalGame: React.FC = () => {
       return;
     }
 
+    // Check if drawn card from discard is being discarded
+    if (
+      gameState.drawnFromDiscard &&
+      selectedCards[0].id === gameState.drawnCard?.id
+    ) {
+      toast({
+        title: "Invalid discard",
+        description:
+          "You cannot discard the card you just drew from the discard pile.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const cardToDiscard = selectedCards[0];
 
+    // Check for clean win (Rami Ndhif)
+    const isCleanWin = checkForCleanWin();
+
     setGameState((prev) => {
+      if (!prev) return prev;
       const newState = { ...prev };
 
       // Remove card from player's hand
@@ -525,12 +766,15 @@ const LocalGame: React.FC = () => {
       // Check if player has won
       if (newState.players[newState.currentPlayerIndex].hand.length === 0) {
         // End the round with a winner
-        return endRoundWithWinner(newState);
+        return endRoundWithWinner(newState, isCleanWin);
       } else {
         // Move to next player
         newState.currentPlayerIndex =
           (newState.currentPlayerIndex + 1) % newState.players.length;
         newState.gamePhase = "draw";
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = null;
+        newState.cleanWinPossible = false; // Reset for next player
       }
 
       return newState;
@@ -539,8 +783,22 @@ const LocalGame: React.FC = () => {
     setSelectedCards([]);
   };
 
+  // Check for clean win (Rami Ndhif)
+  const checkForCleanWin = (): boolean => {
+    return (
+      gameState.cleanWinPossible &&
+      !currentPlayer.hasLaidInitial51 &&
+      gameState.melds.filter((m) => m.playerId === currentPlayer.id).length ===
+        0 &&
+      currentPlayer.hand.length === (gameState.drawnCard ? 1 : 0)
+    );
+  };
+
   // End round with a winner
-  const endRoundWithWinner = (currentState: GameState): GameState => {
+  const endRoundWithWinner = (
+    currentState: GameState,
+    isCleanWin: boolean,
+  ): GameState => {
     const newState = { ...currentState };
     const winner = newState.players[newState.currentPlayerIndex];
 
@@ -554,31 +812,51 @@ const LocalGame: React.FC = () => {
 
         // Update round scores
         roundScores[player.id] = (roundScores[player.id] || 0) + points;
+
+        // Clean win doubles the score for opponents
+        if (isCleanWin) {
+          player.points += points; // Double the points
+          roundScores[player.id] = (roundScores[player.id] || 0) + points; // Double in scores too
+        }
+
         roundScores[winner.id] = roundScores[winner.id] || 0; // Winner gets 0 points
       }
     });
 
     newState.roundScores = roundScores;
 
-    // Check if we have an overall winner
-    const gameWinner = newState.players.find((p) => p.points >= 100)
-      ? null
-      : winner.name;
-
-    if (gameWinner) {
-      newState.gamePhase = "gameOver";
-      newState.winner = gameWinner;
-    } else {
-      // Start new round
-      startNewRound(newState);
+    if (isCleanWin) {
+      toast({
+        title: "Rami Ndhif (Clean Win)!",
+        description: `${winner.name} laid down all cards in one turn! Double points for opponents.`,
+      });
     }
 
-    return newState;
+    // Check if we have an overall winner (a player with 100+ points loses)
+    const losers = newState.players.filter((p) => p.points >= 100);
+
+    if (losers.length > 0) {
+      // Find player with lowest points
+      const lowestPoints = Math.min(...newState.players.map((p) => p.points));
+      const gameWinners = newState.players.filter(
+        (p) => p.points === lowestPoints,
+      );
+
+      if (gameWinners.length === 1) {
+        newState.gamePhase = "gameOver";
+        newState.winner = gameWinners[0].name;
+        return newState;
+      }
+    }
+
+    // Start new round
+    return startNewRound(newState);
   };
 
   // End the round without a winner
   const endRound = () => {
     setGameState((prev) => {
+      if (!prev) return prev;
       const newState = { ...prev };
 
       // Calculate points for all players
@@ -596,15 +874,22 @@ const LocalGame: React.FC = () => {
 
       // Check if we have an overall winner based on lowest points
       if (newState.currentRound >= 3) {
-        const lowestPoints = Math.min(...newState.players.map((p) => p.points));
-        const winners = newState.players.filter(
-          (p) => p.points === lowestPoints,
+        const highestPoints = Math.max(
+          ...newState.players.map((p) => p.points),
         );
+        if (highestPoints >= 100) {
+          const lowestPoints = Math.min(
+            ...newState.players.map((p) => p.points),
+          );
+          const winners = newState.players.filter(
+            (p) => p.points === lowestPoints,
+          );
 
-        if (winners.length === 1) {
-          newState.gamePhase = "gameOver";
-          newState.winner = winners[0].name;
-          return newState;
+          if (winners.length === 1) {
+            newState.gamePhase = "gameOver";
+            newState.winner = winners[0].name;
+            return newState;
+          }
         }
       }
 
@@ -626,12 +911,12 @@ const LocalGame: React.FC = () => {
     // Reset player hands and meld status
     newState.players.forEach((player) => {
       player.hand = [];
-      player.hasMelded = false;
+      player.hasLaidInitial51 = false;
       player.meldPoints = 0;
     });
 
-    // Deal 10 cards to each player
-    for (let i = 0; i < 10; i++) {
+    // Deal 14 cards to each player
+    for (let i = 0; i < 14; i++) {
       for (let p = 0; p < newState.players.length; p++) {
         if (deck.length > 0) {
           const card = deck.pop()!;
@@ -652,6 +937,9 @@ const LocalGame: React.FC = () => {
     newState.melds = [];
     newState.currentPlayerIndex = 0;
     newState.gamePhase = "draw";
+    newState.drawnFromDiscard = false;
+    newState.drawnCard = null;
+    newState.cleanWinPossible = true;
 
     return newState;
   };
@@ -660,67 +948,19 @@ const LocalGame: React.FC = () => {
   const resetGame = () => {
     setSelectedCards([]);
     setSelectedMeld(null);
-
-    setGameState(() => {
-      const deck = createDeck();
-      const players: Player[] = [
-        {
-          id: "player1",
-          name: "Player 1",
-          hand: [],
-          points: 0,
-          hasMelded: false,
-          meldPoints: 0,
-        },
-        {
-          id: "player2",
-          name: "Player 2",
-          hand: [],
-          points: 0,
-          hasMelded: false,
-          meldPoints: 0,
-        },
-      ];
-
-      // Deal 10 cards to each player
-      for (let i = 0; i < 10; i++) {
-        for (let p = 0; p < players.length; p++) {
-          if (deck.length > 0) {
-            const card = deck.pop()!;
-            players[p].hand.push(card);
-          }
-        }
-      }
-
-      // Initial discard pile with one card
-      const discardPile: Card[] = [];
-      if (deck.length > 0) {
-        discardPile.push(deck.pop()!);
-      }
-
-      return {
-        deck,
-        players,
-        currentPlayerIndex: 0,
-        discardPile,
-        melds: [],
-        gamePhase: "draw",
-        winner: null,
-        roundScores: {},
-        currentRound: 1,
-      };
-    });
+    setShowSetup(true);
+    setGameState(null);
   };
 
   // Show winner message
   useEffect(() => {
-    if (gameState.winner) {
+    if (gameState?.winner) {
       toast({
         title: "Game Over",
         description: `${gameState.winner} wins the game!`,
       });
     }
-  }, [gameState.winner, toast]);
+  }, [gameState?.winner, toast]);
 
   return (
     <div className="min-h-screen bg-brown-900 flex flex-col p-4 text-white">
@@ -778,6 +1018,13 @@ const LocalGame: React.FC = () => {
                 {gameState.gamePhase.charAt(0).toUpperCase() +
                   gameState.gamePhase.slice(1)}
               </p>
+              {gameState.drawnFromDiscard && gameState.drawnCard && (
+                <div className="mt-1">
+                  <Badge className="bg-amber-600 text-white">
+                    Must use drawn card in a meld
+                  </Badge>
+                </div>
+              )}
             </div>
 
             <div className="flex gap-4 items-center">
@@ -790,11 +1037,12 @@ const LocalGame: React.FC = () => {
                 <div key={player.id} className="text-center">
                   <div className="text-sm text-white/70">{player.name}</div>
                   <div className="font-bold">{player.points} pts</div>
-                  {!player.hasMelded && player.id === currentPlayer.id && (
-                    <Badge className="bg-amber-600 text-white text-xs">
-                      Need {FIRST_MELD_POINTS}+ pts to meld
-                    </Badge>
-                  )}
+                  {!player.hasLaidInitial51 &&
+                    player.id === currentPlayer.id && (
+                      <Badge className="bg-amber-600 text-white text-xs">
+                        Need {FIRST_MELD_POINTS}+ pts to meld
+                      </Badge>
+                    )}
                 </div>
               ))}
             </div>
@@ -842,6 +1090,7 @@ const LocalGame: React.FC = () => {
                             suit={card.suit}
                             rank={card.rank}
                             faceUp={true}
+                            isJoker={card.isJoker}
                             style={{ width: "70px", height: "98px" }}
                           />
                         </div>
@@ -901,6 +1150,10 @@ const LocalGame: React.FC = () => {
                       rank={
                         gameState.discardPile[gameState.discardPile.length - 1]
                           .rank
+                      }
+                      isJoker={
+                        gameState.discardPile[gameState.discardPile.length - 1]
+                          .isJoker
                       }
                       faceUp={true}
                       style={{ width: "80px", height: "112px" }}
@@ -971,7 +1224,7 @@ const LocalGame: React.FC = () => {
                     Selected cards worth: {calculatePoints(selectedCards)}{" "}
                     points
                   </div>
-                  {!currentPlayer.hasMelded && (
+                  {!currentPlayer.hasLaidInitial51 && (
                     <div className="text-xs text-amber-300">
                       First meld requires at least {FIRST_MELD_POINTS} points
                     </div>
@@ -994,8 +1247,15 @@ const LocalGame: React.FC = () => {
               <GameCard
                 suit={card.suit}
                 rank={card.rank}
+                isJoker={card.isJoker}
                 faceUp={true}
                 selected={selectedCards.some((c) => c.id === card.id)}
+                className={
+                  gameState.drawnCard?.id === card.id &&
+                  gameState.drawnFromDiscard
+                    ? "ring-2 ring-amber-500"
+                    : ""
+                }
                 onClick={() => handleCardClick(card)}
               />
             </div>
@@ -1012,75 +1272,106 @@ const LocalGame: React.FC = () => {
               Learn how to play the traditional Tunisian Rami card game
             </DialogDescription>
           </DialogHeader>
-
-          <div className="space-y-4 text-left">
-            <div>
-              <h3 className="text-lg font-bold">Objective</h3>
-              <p>
-                Be the first player to get rid of all your cards by forming
-                valid combinations.
-              </p>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-bold">Card Values</h3>
-              <ul className="list-disc pl-5">
-                <li>Ace: 1 point</li>
-                <li>Number cards (2-10): Face value</li>
-                <li>Face cards (J, Q, K): 10 points each</li>
-              </ul>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-bold">Valid Combinations</h3>
-              <ul className="list-disc pl-5">
-                <li>
-                  <strong>Sets:</strong> 3 or 4 cards of the same rank but
-                  different suits (e.g., 7♥, 7♠, 7♣)
-                </li>
-                <li>
-                  <strong>Runs:</strong> 3 or more consecutive cards of the same
-                  suit (e.g., 4♥, 5♥, 6♥)
-                </li>
-              </ul>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-bold">Gameplay</h3>
-              <ol className="list-decimal pl-5">
-                <li>Each player is dealt 10 cards.</li>
-                <li>
-                  On your turn:
-                  <ul className="list-disc pl-5">
-                    <li>
-                      Draw a card from either the deck or the discard pile
-                    </li>
-                    <li>Form and lay down valid combinations (optional)</li>
-                    <li>Add cards to existing combinations (optional)</li>
-                    <li>Discard one card to end your turn</li>
-                  </ul>
-                </li>
-              </ol>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-bold">First Meld Requirement</h3>
-              <p>Your first meld must be worth at least 51 points.</p>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-bold">Winning</h3>
-              <p>
-                The first player to get rid of all their cards wins the round.
-                Points in opponents' hands are added to their scores. The player
-                with the lowest score after multiple rounds wins the game.
-              </p>
-            </div>
-          </div>
+          <RulesContent />
         </DialogContent>
       </Dialog>
     </div>
   );
 };
+
+// Rules content as a separate component for reuse
+const RulesContent = () => (
+  <div className="space-y-4 text-left">
+    <div>
+      <h3 className="text-lg font-bold">Objective</h3>
+      <p>
+        Be the first player to get rid of all your cards by forming valid
+        combinations.
+      </p>
+    </div>
+
+    <div>
+      <h3 className="text-lg font-bold">Players & Deck</h3>
+      <p>2 to 4 players play with 108 cards:</p>
+      <ul className="list-disc pl-5">
+        <li>2 full decks of 52 cards</li>
+        <li>4 Jokers</li>
+      </ul>
+    </div>
+
+    <div>
+      <h3 className="text-lg font-bold">Card Values</h3>
+      <ul className="list-disc pl-5">
+        <li>Ace: 1 point</li>
+        <li>Number cards (2-10): Face value</li>
+        <li>Face cards (J, Q, K): 10 points each</li>
+        <li>Joker: Value of the card it substitutes</li>
+      </ul>
+    </div>
+
+    <div>
+      <h3 className="text-lg font-bold">Valid Combinations</h3>
+      <ul className="list-disc pl-5">
+        <li>
+          <strong>Sets:</strong> 3 or 4 cards of the same rank but different
+          suits (e.g., 7♥, 7♠, 7♣)
+        </li>
+        <li>
+          <strong>Runs:</strong> 3 or more consecutive cards of the same suit
+          (e.g., 4♥, 5♥, 6♥)
+        </li>
+        <li>
+          <strong>Jokers:</strong> Can substitute any card, limit of 1 joker per
+          meld
+        </li>
+      </ul>
+    </div>
+
+    <div>
+      <h3 className="text-lg font-bold">Gameplay</h3>
+      <ol className="list-decimal pl-5">
+        <li>Each player is dealt 14 cards.</li>
+        <li>
+          On your turn:
+          <ul className="list-disc pl-5">
+            <li>Draw a card from either the deck or the discard pile</li>
+            <li>
+              If drawing from discard pile, you must use that card in a meld
+              immediately
+            </li>
+            <li>Form and lay down valid combinations (optional)</li>
+            <li>
+              Add cards to existing combinations (optional, after first meld)
+            </li>
+            <li>Discard one card to end your turn</li>
+          </ul>
+        </li>
+      </ol>
+    </div>
+
+    <div>
+      <h3 className="text-lg font-bold">First Meld Requirement</h3>
+      <p>Your first meld must be worth at least 51 points.</p>
+    </div>
+
+    <div>
+      <h3 className="text-lg font-bold">"Rami Ndhif" (Clean Win)</h3>
+      <p>
+        If a player lays down all cards (including drawn card) in one turn with
+        no previous melds, they get a "clean win" and opponents get double
+        points.
+      </p>
+    </div>
+
+    <div>
+      <h3 className="text-lg font-bold">Winning</h3>
+      <p>
+        The first player to get rid of all their cards wins the round. Points in
+        opponents' hands are added to their scores. When a player reaches 100
+        points, the game ends and the player with the lowest score wins.
+      </p>
+    </div>
+  </div>
+);
 
 export default LocalGame;
