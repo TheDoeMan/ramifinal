@@ -62,6 +62,12 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        brown: {
+          900: "rgb(71, 45, 32)",
+          800: "rgb(91, 60, 44)",
+          700: "rgb(111, 75, 56)",
+          600: "rgb(131, 90, 68)",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -85,10 +91,20 @@ export default {
             height: "0",
           },
         },
+        float: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-10px)" },
+        },
+        "card-flip": {
+          "0%": { transform: "rotateY(0deg)" },
+          "100%": { transform: "rotateY(180deg)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        float: "float 3s ease-in-out infinite",
+        "card-flip": "card-flip 0.5s ease-out forwards",
       },
     },
   },

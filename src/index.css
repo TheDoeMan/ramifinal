@@ -49,6 +49,11 @@
     --sidebar-border: 220 13% 91%;
 
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Custom colors for Tunisian Rami */
+    --brown-900: 29 29% 20%;
+    --brown-800: 29 29% 30%;
+    --brown-700: 29 29% 40%;
   }
 
   .dark {
@@ -98,4 +103,59 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Custom styles for Tunisian Rami */
+.text-shadow {
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.bg-brown-900 {
+  background-color: rgb(71, 45, 32);
+}
+
+.backdrop-blur-md {
+  backdrop-filter: blur(12px);
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Card game specific styles */
+.playing-card {
+  width: 100px;
+  height: 140px;
+  border-radius: 8px;
+  background-color: white;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  position: relative;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.playing-card:hover {
+  transform: translateY(-10px);
+}
+
+.card-red {
+  color: #d22;
+}
+
+.card-black {
+  color: #222;
+}
+
+.card-back {
+  background-color: #a52;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 10px,
+    rgba(255, 255, 255, 0.1) 10px,
+    rgba(255, 255, 255, 0.1) 20px
+  );
 }
