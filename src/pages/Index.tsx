@@ -3,7 +3,16 @@ import { Link } from "react-router-dom";
 
 const Index = () => {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-brown-900">
+    <div
+      className="min-h-screen flex items-center justify-center bg-brown-900"
+      style={{
+        backgroundImage:
+          "url(https://cdn.builder.io/api/v1/image/assets%2F547c7d5bd6fb430fa6db21f988ef40a9%2F61eb53c0582a4f6ab622b80bdc878549)",
+        backgroundRepeat: "no-repeat",
+        backgroundPosition: "center",
+        backgroundSize: "cover",
+      }}
+    >
       <div className="text-center w-full max-w-6xl p-8">
         <div className="bg-black/20 backdrop-blur-md rounded-xl p-8 border border-white/10 shadow-2xl">
           <h1 className="text-4xl font-bold text-white mb-6 text-shadow">
