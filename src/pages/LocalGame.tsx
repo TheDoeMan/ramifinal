@@ -989,14 +989,27 @@ const LocalGame: React.FC = () => {
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-2xl font-bold">Tunisian Rami - Local Game</h1>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setShowRules(true)}>
+          <Button
+            variant="outline"
+            onClick={() => setShowRules(true)}
+            className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+          >
             Rules
           </Button>
-          <Button variant="outline" onClick={resetGame}>
+          <Button
+            variant="outline"
+            onClick={resetGame}
+            className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+          >
             New Game
           </Button>
           <Link to="/">
-            <Button variant="outline">Main Menu</Button>
+            <Button
+              variant="outline"
+              className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+            >
+              Main Menu
+            </Button>
           </Link>
         </div>
       </div>
@@ -1259,10 +1272,75 @@ const LocalGame: React.FC = () => {
 
       {/* Player's hand */}
       <div className="mt-4 bg-black/30 backdrop-blur-md rounded-xl p-4">
-        <h3 className="text-lg font-semibold mb-4">
-          {currentPlayer.name}'s Hand ({calculatePoints(currentPlayer.hand)}{" "}
-          points)
-        </h3>
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold">
+            {currentPlayer.name}'s Hand ({calculatePoints(currentPlayer.hand)}{" "}
+            points)
+          </h3>
+          <Button
+            size="sm"
+            variant="outline"
+            className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+            onClick={() => {
+              // Auto organize cards
+              setGameState((prev) => {
+                if (!prev) return prev;
+                const newState = { ...prev };
+
+                // Group by suit first, then by rank value
+                const sortedHand = [
+                  ...newState.players[newState.currentPlayerIndex].hand,
+                ].sort((a, b) => {
+                  // First by suit
+                  if (a.suit !== b.suit) {
+                    // Order: hearts, diamonds, clubs, spades
+                    const suitOrder = {
+                      hearts: 0,
+                      diamonds: 1,
+                      clubs: 2,
+                      spades: 3,
+                    };
+                    return suitOrder[a.suit] - suitOrder[b.suit];
+                  }
+                  // Then by value
+                  return a.value - b.value;
+                });
+
+                newState.players[newState.currentPlayerIndex].hand = sortedHand;
+                return newState;
+              });
+
+              toast({
+                title: "Cards organized",
+                description: "Your hand has been sorted by suit and rank",
+              });
+            }}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="mr-1"
+            >
+              <line x1="21" x2="14" y1="4" y2="4"></line>
+              <line x1="10" x2="3" y1="4" y2="4"></line>
+              <line x1="21" x2="12" y1="12" y2="12"></line>
+              <line x1="8" x2="3" y1="12" y2="12"></line>
+              <line x1="21" x2="16" y1="20" y2="20"></line>
+              <line x1="12" x2="3" y1="20" y2="20"></line>
+              <line x1="14" x2="14" y1="2" y2="6"></line>
+              <line x1="8" x2="8" y1="10" y2="14"></line>
+              <line x1="16" x2="16" y1="18" y2="22"></line>
+            </svg>
+            Organize Cards
+          </Button>
+        </div>
         <div className="flex gap-1 justify-center flex-wrap">
           {currentPlayer.hand.map((card) => (
             <div key={card.id} className="mb-4" style={{ margin: "-10px 2px" }}>
