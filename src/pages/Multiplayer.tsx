@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +14,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Copy, CheckCircle } from "lucide-react";
+import { initializeApp } from "firebase/app";
+import {
+  getDatabase,
+  ref,
+  set,
+  onValue,
+  onDisconnect,
+  update,
+  get,
+  remove,
+  off,
+} from "firebase/database";
 
 // Types for multiplayer game
 type Card = {
@@ -40,12 +52,13 @@ type Player = {
   hand: Card[];
   points: number;
   hasLaidInitial51: boolean;
+  joinedAt: number;
 };
 
 type GameRoom = {
   id: string;
   host: string;
-  players: Player[];
+  players: Record<string, Player>;
   state: "waiting" | "playing" | "ended";
   currentPlayerIndex: number;
   deck: Card[];
@@ -54,6 +67,8 @@ type GameRoom = {
   winner: string | null;
   roundScores: Record<string, number>;
   currentRound: number;
+  createdAt: number;
+  lastActivity: number;
 };
 
 // Card values
@@ -73,27 +88,148 @@ const CARD_VALUES: Record<Rank, number> = {
   K: 10,
 };
 
+// Create two standard decks of cards plus jokers (108 cards total)
+const createDeck = (): Card[] => {
+  const suits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
+  const ranks: Rank[] = [
+    "A",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "J",
+    "Q",
+    "K",
+  ];
+  const deck: Card[] = [];
+
+  // Create 2 full decks
+  for (let d = 0; d < 2; d++) {
+    for (const suit of suits) {
+      for (const rank of ranks) {
+        deck.push({
+          id: `${rank}-${suit}-${d}`,
+          suit,
+          rank,
+          value: CARD_VALUES[rank],
+        });
+      }
+    }
+  }
+
+  // Add 4 jokers
+  for (let j = 0; j < 4; j++) {
+    deck.push({
+      id: `joker-${j}`,
+      suit: "hearts", // Default suit, will be visually different
+      rank: "A", // Default rank, will be visually different
+      value: 0, // Value will be determined by what it substitutes
+      isJoker: true,
+    });
+  }
+
+  return shuffleDeck(deck);
+};
+
+// Shuffle deck
+const shuffleDeck = (deck: Card[]): Card[] => {
+  const shuffled = [...deck];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
+
+// Initialize Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyC4x5sL9Cg_XBQ1TUt07uB3gIQ5yfDgFkE",
+  authDomain: "tunisian-rami.firebaseapp.com",
+  databaseURL: "https://tunisian-rami-default-rtdb.firebaseio.com",
+  projectId: "tunisian-rami",
+  storageBucket: "tunisian-rami.appspot.com",
+  messagingSenderId: "936067272943",
+  appId: "1:936067272943:web:ab0c6f4fd3b1ef74a0db32",
+};
+
+// Initialize Firebase once
+let firebaseApp;
+let database;
+
+try {
+  firebaseApp = initializeApp(firebaseConfig);
+  database = getDatabase(firebaseApp);
+} catch (error) {
+  console.error("Firebase initialization error", error);
+}
+
 const Multiplayer = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [gameId, setGameId] = useState("");
-  const [playerName, setPlayerName] = useState("");
+  const [playerName, setPlayerName] = useState(() => {
+    return localStorage.getItem("playerName") || "";
+  });
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [showSetup, setShowSetup] = useState(true);
   const [showRules, setShowRules] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
-
-  // Simulated game room for demonstration
-  const [gameRoom, setGameRoom] = useState<GameRoom | null>(null);
+  const [connectionIssue, setConnectionIssue] = useState(false);
   const [playerId, setPlayerId] = useState<string>("");
+  const [gameRoom, setGameRoom] = useState<GameRoom | null>(null);
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
   const [selectedMeld, setSelectedMeld] = useState<Meld | null>(null);
-  const [yourTurn, setYourTurn] = useState(false);
-  const [connectionIssue, setConnectionIssue] = useState(false);
+  const gameRoomRef = useRef<any>(null);
+  const playerRef = useRef<any>(null);
 
-  // Simulate creating a new game
-  const handleCreateGame = () => {
+  // Save player name to localStorage when it changes
+  useEffect(() => {
+    if (playerName) {
+      localStorage.setItem("playerName", playerName);
+    }
+  }, [playerName]);
+
+  // Handle clean-up when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clean up Firebase listeners
+      if (gameRoomRef.current) {
+        off(gameRoomRef.current);
+      }
+
+      // Mark player as disconnected if they leave the game
+      if (playerRef.current && playerId && gameRoom) {
+        update(playerRef.current, {
+          isConnected: false,
+          lastSeen: Date.now(),
+        });
+      }
+    };
+  }, [playerId, gameRoom]);
+
+  // Generate a unique ID for the player
+  const generatePlayerId = () => {
+    return `player_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  };
+
+  // Generate a unique room code (6 characters)
+  const generateRoomCode = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Excluding characters that look similar
+    let result = "";
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
+  // Create a new game room
+  const handleCreateGame = async () => {
     if (!playerName.trim()) {
       toast({
         title: "Missing information",
@@ -105,30 +241,33 @@ const Multiplayer = () => {
 
     setIsCreating(true);
 
-    // Generate a random game ID
-    const newGameId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    try {
+      // Generate a new game code
+      const newGameId = generateRoomCode();
+      const newPlayerId = generatePlayerId();
 
-    // Simulate API call delay
-    setTimeout(() => {
-      // Create a player ID
-      const newPlayerId =
-        "player_" + Math.random().toString(36).substring(2, 9);
+      // Create timestamp
+      const now = Date.now();
 
-      // Create a simulated game room
-      const newGameRoom: GameRoom = {
+      // Initial player data
+      const playerData: Player = {
+        id: newPlayerId,
+        name: playerName,
+        isReady: true,
+        isConnected: true,
+        hand: [],
+        points: 0,
+        hasLaidInitial51: false,
+        joinedAt: now,
+      };
+
+      // Initial game room data
+      const gameRoomData: GameRoom = {
         id: newGameId,
         host: newPlayerId,
-        players: [
-          {
-            id: newPlayerId,
-            name: playerName,
-            isReady: true,
-            isConnected: true,
-            hand: [],
-            points: 0,
-            hasLaidInitial51: false,
-          },
-        ],
+        players: {
+          [newPlayerId]: playerData,
+        },
         state: "waiting",
         currentPlayerIndex: 0,
         deck: [],
@@ -137,32 +276,53 @@ const Multiplayer = () => {
         winner: null,
         roundScores: {},
         currentRound: 1,
+        createdAt: now,
+        lastActivity: now,
       };
 
-      setGameRoom(newGameRoom);
+      // Write the data to Firebase
+      const gameRoomDbRef = ref(database, `gameRooms/${newGameId}`);
+      await set(gameRoomDbRef, gameRoomData);
+
+      // Set up presence system
+      const playerDbRef = ref(
+        database,
+        `gameRooms/${newGameId}/players/${newPlayerId}`,
+      );
+      playerRef.current = playerDbRef;
+
+      // Set up disconnect handler
+      const onDisconnectRef = onDisconnect(playerDbRef);
+      onDisconnectRef.update({
+        isConnected: false,
+        lastSeen: { ".sv": "timestamp" },
+      });
+
+      // Subscribe to game room updates
+      subscribeToGameRoom(newGameId);
+
       setPlayerId(newPlayerId);
       setGameId(newGameId);
-      setIsCreating(false);
       setShowSetup(false);
 
-      // Notify user
       toast({
         title: "Game created",
         description: `Share code ${newGameId} with friends to join`,
       });
-
-      // Simulate another player joining after a delay
-      setTimeout(() => {
-        if (Math.random() > 0.3) {
-          // 70% chance a player will join
-          simulatePlayerJoining();
-        }
-      }, 10000);
-    }, 1500);
+    } catch (error) {
+      console.error("Error creating game:", error);
+      toast({
+        title: "Error creating game",
+        description: "There was a problem creating the game. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
   };
 
-  // Simulate joining an existing game
-  const handleJoinGame = () => {
+  // Join an existing game
+  const handleJoinGame = async () => {
     if (!gameId.trim() || !playerName.trim()) {
       toast({
         title: "Missing information",
@@ -174,12 +334,12 @@ const Multiplayer = () => {
 
     setIsJoining(true);
 
-    // Simulate API call delay
-    setTimeout(() => {
-      // Check if game exists (using random for simulation)
-      const gameExists = Math.random() > 0.2; // 80% chance game exists
+    try {
+      // Check if game exists
+      const gameRoomDbRef = ref(database, `gameRooms/${gameId}`);
+      const snapshot = await get(gameRoomDbRef);
 
-      if (!gameExists) {
+      if (!snapshot.exists()) {
         toast({
           title: "Game not found",
           description:
@@ -190,38 +350,39 @@ const Multiplayer = () => {
         return;
       }
 
-      // Create a player ID
-      const newPlayerId =
-        "player_" + Math.random().toString(36).substring(2, 9);
+      const gameData = snapshot.val() as GameRoom;
 
-      // Create a simulated game room with existing players
-      const existingPlayers = [
-        {
-          id: "host_" + Math.random().toString(36).substring(2, 9),
-          name: "Host Player",
-          isReady: true,
-          isConnected: true,
-          hand: [],
-          points: 0,
-          hasLaidInitial51: false,
-        },
-      ];
-
-      // Add more players randomly
-      if (Math.random() > 0.5) {
-        existingPlayers.push({
-          id: "player_" + Math.random().toString(36).substring(2, 9),
-          name: "Random Player",
-          isReady: Math.random() > 0.5,
-          isConnected: true,
-          hand: [],
-          points: 0,
-          hasLaidInitial51: false,
+      // Check if game is already in progress
+      if (gameData.state === "playing") {
+        toast({
+          title: "Game in progress",
+          description: "This game has already started. You cannot join it now.",
+          variant: "destructive",
         });
+        setIsJoining(false);
+        return;
       }
 
-      // Add the joining player
-      existingPlayers.push({
+      // Check if game is full (max 4 players)
+      const currentPlayers = gameData.players
+        ? Object.keys(gameData.players).length
+        : 0;
+      if (currentPlayers >= 4) {
+        toast({
+          title: "Game is full",
+          description:
+            "This game already has the maximum number of players (4).",
+          variant: "destructive",
+        });
+        setIsJoining(false);
+        return;
+      }
+
+      // Generate player ID and create player data
+      const newPlayerId = generatePlayerId();
+      const now = Date.now();
+
+      const playerData: Player = {
         id: newPlayerId,
         name: playerName,
         isReady: false,
@@ -229,134 +390,184 @@ const Multiplayer = () => {
         hand: [],
         points: 0,
         hasLaidInitial51: false,
-      });
-
-      const newGameRoom: GameRoom = {
-        id: gameId,
-        host: existingPlayers[0].id,
-        players: existingPlayers,
-        state: "waiting",
-        currentPlayerIndex: 0,
-        deck: [],
-        discardPile: [],
-        melds: [],
-        winner: null,
-        roundScores: {},
-        currentRound: 1,
+        joinedAt: now,
       };
 
-      setGameRoom(newGameRoom);
+      // Add player to the game
+      const playerDbRef = ref(
+        database,
+        `gameRooms/${gameId}/players/${newPlayerId}`,
+      );
+      playerRef.current = playerDbRef;
+      await set(playerDbRef, playerData);
+
+      // Update last activity timestamp
+      const activityRef = ref(database, `gameRooms/${gameId}/lastActivity`);
+      await set(activityRef, now);
+
+      // Set up disconnect handler
+      const onDisconnectRef = onDisconnect(playerDbRef);
+      onDisconnectRef.update({
+        isConnected: false,
+        lastSeen: { ".sv": "timestamp" },
+      });
+
+      // Subscribe to game room updates
+      subscribeToGameRoom(gameId);
+
       setPlayerId(newPlayerId);
-      setIsJoining(false);
       setShowSetup(false);
 
       toast({
         title: "Joined game",
         description: `You've joined game ${gameId}`,
       });
-    }, 1500);
+    } catch (error) {
+      console.error("Error joining game:", error);
+      toast({
+        title: "Error joining game",
+        description: "There was a problem joining the game. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsJoining(false);
+    }
   };
 
-  // Simulate another player joining
-  const simulatePlayerJoining = () => {
-    if (!gameRoom) return;
+  // Subscribe to game room updates
+  const subscribeToGameRoom = (roomId: string) => {
+    const gameRoomDbRef = ref(database, `gameRooms/${roomId}`);
+    gameRoomRef.current = gameRoomDbRef;
 
-    // Simulate a new player joining
-    const newPlayer: Player = {
-      id: "player_" + Math.random().toString(36).substring(2, 9),
-      name: "Player " + Math.floor(Math.random() * 100),
-      isReady: false,
-      isConnected: true,
-      hand: [],
-      points: 0,
-      hasLaidInitial51: false,
-    };
+    onValue(
+      gameRoomDbRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const gameData = snapshot.val() as GameRoom;
+          setGameRoom(gameData);
+          setConnectionIssue(false);
 
-    setGameRoom((prevRoom) => {
-      if (!prevRoom) return null;
-      return {
-        ...prevRoom,
-        players: [...prevRoom.players, newPlayer],
-      };
-    });
-
-    toast({
-      title: "Player joined",
-      description: `${newPlayer.name} has joined the game`,
-    });
+          // If the game has started, update the UI
+          if (gameData.state === "playing" && showSetup) {
+            setShowSetup(false);
+          }
+        } else {
+          // Game room doesn't exist anymore
+          toast({
+            title: "Game ended",
+            description: "The game room no longer exists.",
+            variant: "destructive",
+          });
+          setGameRoom(null);
+          setShowSetup(true);
+        }
+      },
+      (error) => {
+        console.error("Error listening to game room:", error);
+        setConnectionIssue(true);
+      },
+    );
   };
 
   // Toggle ready status
-  const toggleReady = () => {
+  const toggleReady = async () => {
     if (!gameRoom || !playerId) return;
 
-    setGameRoom((prevRoom) => {
-      if (!prevRoom) return null;
-
-      // Find and update the player
-      const updatedPlayers = prevRoom.players.map((player) => {
-        if (player.id === playerId) {
-          return { ...player, isReady: !player.isReady };
-        }
-        return player;
+    try {
+      const playerDbRef = ref(
+        database,
+        `gameRooms/${gameRoom.id}/players/${playerId}/isReady`,
+      );
+      const currentStatus = gameRoom.players[playerId].isReady;
+      await set(playerDbRef, !currentStatus);
+    } catch (error) {
+      console.error("Error toggling ready status:", error);
+      toast({
+        title: "Error",
+        description: "Failed to update ready status.",
+        variant: "destructive",
       });
-
-      return {
-        ...prevRoom,
-        players: updatedPlayers,
-      };
-    });
-
-    // Check if all players are ready and start game if host
-    setTimeout(() => {
-      if (gameRoom && playerId === gameRoom.host) {
-        const allReady = gameRoom.players.every((player) => player.isReady);
-        if (allReady && gameRoom.players.length >= 2) {
-          startGame();
-        }
-      }
-    }, 500);
+    }
   };
 
   // Start the game (host only)
-  const startGame = () => {
+  const startGame = async () => {
     if (!gameRoom || playerId !== gameRoom.host) return;
 
-    toast({
-      title: "Starting game",
-      description: "Dealing cards and setting up the game...",
-    });
-
-    // Simulate game starting delay
-    setTimeout(() => {
-      setGameRoom((prevRoom) => {
-        if (!prevRoom) return null;
-
-        return {
-          ...prevRoom,
-          state: "playing",
-        };
+    // Check if there are at least 2 players
+    const players = Object.values(gameRoom.players);
+    if (players.length < 2) {
+      toast({
+        title: "Not enough players",
+        description: "You need at least 2 players to start the game.",
+        variant: "destructive",
       });
+      return;
+    }
 
-      simulateGameplay();
-    }, 2000);
-  };
+    // Check if all players are ready
+    const allReady = players.every((player) => player.isReady);
+    if (!allReady) {
+      toast({
+        title: "Players not ready",
+        description: "All players must be ready to start the game.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  // Simulate some basic gameplay for demonstration
-  const simulateGameplay = () => {
-    // Set a random player's turn
-    setYourTurn(Math.random() > 0.5);
+    try {
+      // Generate the deck and deal cards
+      const deck = createDeck();
+      const playerIds = Object.keys(gameRoom.players);
+      const playerHandsMap: Record<string, Card[]> = {};
 
-    // Simulate occasional connection issues
-    setTimeout(() => {
-      if (Math.random() > 0.7) {
-        setConnectionIssue(true);
-
-        setTimeout(() => {
-          setConnectionIssue(false);
-        }, 5000);
+      // Deal 14 cards to each player
+      for (let i = 0; i < 14; i++) {
+        for (const pId of playerIds) {
+          if (deck.length > 0) {
+            const card = deck.pop()!;
+            if (!playerHandsMap[pId]) {
+              playerHandsMap[pId] = [];
+            }
+            playerHandsMap[pId].push(card);
+          }
+        }
       }
-    }, 15000);
+
+      // Create initial discard pile with one card
+      const discardPile: Card[] = [];
+      if (deck.length > 0) {
+        discardPile.push(deck.pop()!);
+      }
+
+      // Updates to write to Firebase
+      const updates: Record<string, any> = {};
+      updates[`gameRooms/${gameRoom.id}/state`] = "playing";
+      updates[`gameRooms/${gameRoom.id}/deck`] = deck;
+      updates[`gameRooms/${gameRoom.id}/discardPile`] = discardPile;
+      updates[`gameRooms/${gameRoom.id}/lastActivity`] = Date.now();
+
+      // Set player hands
+      for (const [pId, hand] of Object.entries(playerHandsMap)) {
+        updates[`gameRooms/${gameRoom.id}/players/${pId}/hand`] = hand;
+      }
+
+      // Apply all updates at once
+      await update(ref(database), updates);
+
+      toast({
+        title: "Game started",
+        description: "The game has begun! Good luck!",
+      });
+    } catch (error) {
+      console.error("Error starting game:", error);
+      toast({
+        title: "Error",
+        description: "Failed to start the game. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   // Copy game code to clipboard
@@ -368,6 +579,10 @@ const Multiplayer = () => {
       .then(() => {
         setCopySuccess(true);
         setTimeout(() => setCopySuccess(false), 2000);
+        toast({
+          title: "Code copied",
+          description: "Game code copied to clipboard",
+        });
       })
       .catch((err) => {
         console.error("Failed to copy: ", err);
@@ -380,19 +595,66 @@ const Multiplayer = () => {
   };
 
   // Leave the game and return to setup
-  const leaveGame = () => {
+  const leaveGame = async () => {
     // Confirm before leaving
     if (window.confirm("Are you sure you want to leave this game?")) {
-      setGameRoom(null);
-      setPlayerId("");
-      setShowSetup(true);
-      setSelectedCards([]);
-      setSelectedMeld(null);
+      try {
+        if (gameRoom && playerId) {
+          // If player is host and there are other players, transfer host
+          if (
+            playerId === gameRoom.host &&
+            Object.keys(gameRoom.players).length > 1
+          ) {
+            // Find another player to be host
+            const otherPlayers = Object.keys(gameRoom.players).filter(
+              (id) => id !== playerId,
+            );
+            if (otherPlayers.length > 0) {
+              const newHost = otherPlayers[0];
+              await update(ref(database, `gameRooms/${gameRoom.id}`), {
+                host: newHost,
+              });
+            }
+          }
 
-      toast({
-        title: "Left game",
-        description: "You've left the multiplayer game",
-      });
+          // Remove player from the game
+          await remove(
+            ref(database, `gameRooms/${gameRoom.id}/players/${playerId}`),
+          );
+
+          // If this is the last player, remove the entire game room
+          const playerCount = Object.keys(gameRoom.players).length;
+          if (playerCount <= 1) {
+            await remove(ref(database, `gameRooms/${gameRoom.id}`));
+          }
+        }
+
+        // Clean up local state
+        if (gameRoomRef.current) {
+          off(gameRoomRef.current);
+          gameRoomRef.current = null;
+        }
+        playerRef.current = null;
+
+        setGameRoom(null);
+        setPlayerId("");
+        setShowSetup(true);
+        setSelectedCards([]);
+        setSelectedMeld(null);
+
+        toast({
+          title: "Left game",
+          description: "You've left the multiplayer game",
+        });
+      } catch (error) {
+        console.error("Error leaving game:", error);
+        toast({
+          title: "Error",
+          description:
+            "There was a problem leaving the game. Please try again.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -450,7 +712,7 @@ const Multiplayer = () => {
                   <Button
                     onClick={handleCreateGame}
                     className="w-full"
-                    disabled={isCreating}
+                    disabled={isCreating || !playerName.trim()}
                   >
                     {isCreating ? "Creating..." : "Create Game"}
                   </Button>
@@ -476,7 +738,7 @@ const Multiplayer = () => {
                   <Button
                     onClick={handleJoinGame}
                     className="w-full"
-                    disabled={isJoining}
+                    disabled={isJoining || !gameId.trim() || !playerName.trim()}
                   >
                     {isJoining ? "Joining..." : "Join Game"}
                   </Button>
@@ -492,22 +754,22 @@ const Multiplayer = () => {
                   Game Rules
                 </Button>
               </div>
-
-              {/* Rules dialog */}
-              <Dialog open={showRules} onOpenChange={setShowRules}>
-                <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Tunisian Rami Rules</DialogTitle>
-                    <DialogDescription>
-                      Learn how to play the traditional Tunisian Rami card game
-                    </DialogDescription>
-                  </DialogHeader>
-                  <RulesContent />
-                </DialogContent>
-              </Dialog>
             </div>
           </div>
         </div>
+
+        {/* Rules dialog */}
+        <Dialog open={showRules} onOpenChange={setShowRules}>
+          <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Tunisian Rami Rules</DialogTitle>
+              <DialogDescription>
+                Learn how to play the traditional Tunisian Rami card game
+              </DialogDescription>
+            </DialogHeader>
+            <RulesContent />
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
@@ -561,6 +823,11 @@ const Multiplayer = () => {
                 onClick={copyGameCode}
                 className="text-white bg-white/10 border-white/20 h-8"
               >
+                {copySuccess ? (
+                  <CheckCircle className="h-4 w-4 mr-1" />
+                ) : (
+                  <Copy className="h-4 w-4 mr-1" />
+                )}
                 {copySuccess ? "Copied!" : "Copy"}
               </Button>
             </div>
@@ -570,8 +837,8 @@ const Multiplayer = () => {
             <Button
               onClick={startGame}
               disabled={
-                gameRoom.players.length < 2 ||
-                !gameRoom.players.every((p) => p.isReady)
+                Object.keys(gameRoom.players).length < 2 ||
+                !Object.values(gameRoom.players).every((p) => p.isReady)
               }
               className="mt-2 md:mt-0"
             >
@@ -592,43 +859,45 @@ const Multiplayer = () => {
             <div className="bg-black/20 rounded-lg p-4 mb-6">
               <h3 className="text-lg font-medium mb-4">Players</h3>
               <div className="space-y-3">
-                {gameRoom.players.map((player) => (
-                  <div
-                    key={player.id}
-                    className="flex justify-between items-center bg-black/20 p-3 rounded-md"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`w-3 h-3 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
-                      ></div>
-                      <span className="font-medium">{player.name}</span>
-                      {player.id === gameRoom.host && (
-                        <Badge className="bg-amber-600">Host</Badge>
-                      )}
-                      {player.id === playerId && (
-                        <Badge className="bg-blue-600">You</Badge>
-                      )}
+                {gameRoom &&
+                  Object.values(gameRoom.players).map((player) => (
+                    <div
+                      key={player.id}
+                      className="flex justify-between items-center bg-black/20 p-3 rounded-md"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`w-3 h-3 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
+                        ></div>
+                        <span className="font-medium">{player.name}</span>
+                        {player.id === gameRoom.host && (
+                          <Badge className="bg-amber-600">Host</Badge>
+                        )}
+                        {player.id === playerId && (
+                          <Badge className="bg-blue-600">You</Badge>
+                        )}
+                      </div>
+                      <div>
+                        {player.isReady ? (
+                          <Badge className="bg-green-600">Ready</Badge>
+                        ) : (
+                          <Badge className="bg-slate-600">Not Ready</Badge>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      {player.isReady ? (
-                        <Badge className="bg-green-600">Ready</Badge>
-                      ) : (
-                        <Badge className="bg-slate-600">Not Ready</Badge>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
 
             <div className="text-center">
-              {gameRoom.players.length < 2 ? (
+              {gameRoom && Object.keys(gameRoom.players).length < 2 ? (
                 <div className="text-amber-300 mb-4">
                   Waiting for at least one more player to join...
                 </div>
               ) : (
                 <>
-                  {!gameRoom.players.every((p) => p.isReady) ? (
+                  {gameRoom &&
+                  !Object.values(gameRoom.players).every((p) => p.isReady) ? (
                     <div className="text-amber-300 mb-4">
                       Waiting for all players to be ready...
                     </div>
@@ -640,7 +909,7 @@ const Multiplayer = () => {
                 </>
               )}
 
-              {gameRoom.players.find((p) => p.id === playerId)?.isReady ? (
+              {gameRoom && playerId && gameRoom.players[playerId]?.isReady ? (
                 <Button
                   onClick={toggleReady}
                   variant="outline"
@@ -667,81 +936,68 @@ const Multiplayer = () => {
         <div className="flex-grow bg-black/30 backdrop-blur-md rounded-xl p-6">
           <div className="text-center mb-6">
             <h2 className="text-xl font-semibold">
-              {yourTurn ? "Your Turn" : `Waiting for other player's turn...`}
+              {gameRoom.players[playerId]?.hand
+                ? "Game in Progress"
+                : "Loading game..."}
             </h2>
-
-            {yourTurn ? (
-              <div className="flex justify-center mt-2 gap-2">
-                <Button disabled={!yourTurn}>Draw Card</Button>
-                <Button disabled={!yourTurn}>Discard</Button>
-              </div>
-            ) : (
-              <div className="animate-pulse text-amber-300 mt-2">
-                Other player is making their move...
-              </div>
-            )}
           </div>
 
           <div className="bg-black/20 rounded-lg p-4 mb-6">
             <h3 className="text-lg font-medium mb-3">Players</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {gameRoom.players.map((player) => (
-                <div
-                  key={player.id}
-                  className={`${player.id === gameRoom.players[gameRoom.currentPlayerIndex].id ? "bg-amber-900/40 border-amber-500" : "bg-black/30"} p-3 rounded-md border border-white/10`}
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <div
-                      className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
-                    ></div>
-                    <span className="font-medium">{player.name}</span>
-                    {player.id === playerId && (
-                      <Badge className="bg-blue-600 text-xs">You</Badge>
-                    )}
-                  </div>
-                  <div className="text-sm text-white/70">
-                    Cards: {player.id === playerId ? "14" : "?"}
-                  </div>
-                  <div className="text-sm text-white/70">
-                    Points: {player.points}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-black/20 rounded-lg p-4 mb-6">
-            <h3 className="text-lg font-medium mb-3">Game Board</h3>
-            <div className="text-center text-white/70 italic">
-              This is a simulated online multiplayer interface. In a full
-              implementation, this would show the game board with melds,
-              draw/discard piles, and other game elements.
-            </div>
-          </div>
-
-          <div className="bg-black/20 rounded-lg p-4 mt-8">
-            <h3 className="text-lg font-medium mb-3">Your Hand</h3>
-            <div className="flex justify-center">
-              <div className="flex gap-1 flex-wrap justify-center">
-                {/* Simulated hand - would be real cards in full implementation */}
-                {Array.from({ length: 14 }).map((_, index) => (
+              {gameRoom &&
+                Object.values(gameRoom.players).map((player) => (
                   <div
-                    key={index}
-                    className="flex-shrink-0"
-                    style={{ margin: "-10px 2px" }}
+                    key={player.id}
+                    className={`bg-black/30 p-3 rounded-md border ${player.id === playerId ? "border-blue-500" : "border-white/10"}`}
                   >
-                    <GameCard
-                      suit="hearts"
-                      rank="K"
-                      faceUp={true}
-                      isJoker={index === 7}
-                      style={{ width: "70px", height: "98px" }}
-                    />
+                    <div className="flex items-center gap-2 mb-1">
+                      <div
+                        className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
+                      ></div>
+                      <span className="font-medium">{player.name}</span>
+                      {player.id === playerId && (
+                        <Badge className="bg-blue-600 text-xs">You</Badge>
+                      )}
+                    </div>
+                    <div className="text-sm text-white/70">
+                      Cards:{" "}
+                      {player.id === playerId
+                        ? player.hand?.length || 0
+                        : player.hand?.length || "?"}
+                    </div>
+                    <div className="text-sm text-white/70">
+                      Points: {player.points}
+                    </div>
                   </div>
                 ))}
-              </div>
             </div>
           </div>
+
+          {playerId && gameRoom.players[playerId]?.hand && (
+            <div className="bg-black/20 rounded-lg p-4 mt-8">
+              <h3 className="text-lg font-medium mb-3">Your Hand</h3>
+              <div className="flex justify-center">
+                <div className="flex gap-1 flex-wrap justify-center">
+                  {gameRoom.players[playerId].hand.map((card, index) => (
+                    <div
+                      key={card.id || index}
+                      className="flex-shrink-0"
+                      style={{ margin: "-10px 2px" }}
+                    >
+                      <GameCard
+                        suit={card.suit}
+                        rank={card.rank}
+                        faceUp={true}
+                        isJoker={card.isJoker}
+                        style={{ width: "70px", height: "98px" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -1,0 +1,38 @@
+{
+  "database": {
+    "rules": {
+      "gameRooms": {
+        ".read": true,
+        ".write": true,
+        "$roomId": {
+          ".read": true,
+          ".write": true,
+          "players": {
+            "$playerId": {
+              ".read": true,
+              ".write": true,
+              "isConnected": {
+                ".read": true,
+                ".write": true
+              },
+              "lastSeen": {
+                ".read": true,
+                ".write": true
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
