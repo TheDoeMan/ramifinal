@@ -275,6 +275,16 @@ const LocalGame: React.FC = () => {
   const [numPlayers, setNumPlayers] = useState<string>("2");
   const [gameState, setGameState] = useState<GameState | null>(null);
 
+  // Show winner message - MOVED here to ensure consistent hook order
+  useEffect(() => {
+    if (gameState?.winner) {
+      toast({
+        title: "Game Over",
+        description: `${gameState.winner} wins the game!`,
+      });
+    }
+  }, [gameState?.winner, toast]);
+
   const startGame = (playerCount: number) => {
     // Initialize game state
     const deck = createDeck();
@@ -325,6 +335,9 @@ const LocalGame: React.FC = () => {
 
     setShowSetup(false);
   };
+
+  // Calculate current player - safe access with optional chaining
+  const currentPlayer = gameState?.players?.[gameState.currentPlayerIndex];
 
   // If game state is null, return early
   if (!gameState) {
@@ -395,8 +408,6 @@ const LocalGame: React.FC = () => {
       </div>
     );
   }
-
-  const currentPlayer = gameState.players[gameState.currentPlayerIndex];
 
   // Handle card selection
   const handleCardClick = (card: Card) => {
@@ -954,16 +965,6 @@ const LocalGame: React.FC = () => {
     setShowSetup(true);
     setGameState(null);
   };
-
-  // Show winner message
-  useEffect(() => {
-    if (gameState?.winner) {
-      toast({
-        title: "Game Over",
-        description: `${gameState.winner} wins the game!`,
-      });
-    }
-  }, [gameState?.winner, toast]);
 
   return (
     <div className="min-h-screen bg-brown-900 flex flex-col p-4 text-white">
