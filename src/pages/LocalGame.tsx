@@ -342,7 +342,16 @@ const LocalGame: React.FC = () => {
   // If game state is null, return early
   if (!gameState) {
     return (
-      <div className="min-h-screen bg-brown-900 flex items-center justify-center p-4 text-white">
+      <div
+        className="min-h-screen bg-brown-900 flex items-center justify-center p-4 text-white"
+        style={{
+          backgroundImage:
+            "url(https://cdn.builder.io/api/v1/image/assets%2F547c7d5bd6fb430fa6db21f988ef40a9%2F61eb53c0582a4f6ab622b80bdc878549)",
+          backgroundRepeat: "no-repeat",
+          backgroundPosition: "center",
+          backgroundSize: "cover",
+        }}
+      >
         <div className="w-full max-w-md">
           <div className="bg-black/20 backdrop-blur-md rounded-xl p-8 border border-white/10 shadow-2xl">
             <h1 className="text-3xl font-bold text-white mb-6 text-shadow">
@@ -967,7 +976,16 @@ const LocalGame: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-brown-900 flex flex-col p-4 text-white">
+    <div
+      className="min-h-screen bg-brown-900 flex flex-col p-4 text-white"
+      style={{
+        backgroundImage:
+          "url(https://cdn.builder.io/api/v1/image/assets%2F547c7d5bd6fb430fa6db21f988ef40a9%2F61eb53c0582a4f6ab622b80bdc878549)",
+        backgroundRepeat: "no-repeat",
+        backgroundPosition: "center",
+        backgroundSize: "cover",
+      }}
+    >
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-2xl font-bold">Tunisian Rami - Local Game</h1>
         <div className="flex gap-2">
