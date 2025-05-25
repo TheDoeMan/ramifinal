@@ -421,9 +421,10 @@ const LocalGame: React.FC = () => {
       });
     }
 
-    // Deal 14 cards to each player
-    for (let i = 0; i < 14; i++) {
-      for (let p = 0; p < players.length; p++) {
+    // Deal exactly 14 cards to each player
+    for (let p = 0; p < players.length; p++) {
+      players[p].hand = []; // Ensure hand is empty
+      for (let i = 0; i < 14; i++) {
         if (deck.length > 0) {
           const card = deck.pop()!;
           players[p].hand.push(card);
@@ -1243,6 +1244,27 @@ const LocalGame: React.FC = () => {
       return;
     }
 
+    // Check if player already has 15 cards (should be 14 before drawing)
+    if (currentPlayer.hand.length >= 15) {
+      toast({
+        title: "Too many cards",
+        description:
+          "You already have the maximum number of cards. Please discard.",
+        variant: "destructive",
+      });
+      setGameState((prev) => {
+        if (!prev) return prev;
+        // Force move to meld phase if player somehow has too many cards
+        return {
+          ...prev,
+          gamePhase: "meld",
+          drawnFromDiscard: false,
+          drawnCard: null,
+        };
+      });
+      return;
+    }
+
     if (gameState.deck.length === 0) {
       // If deck is empty, shuffle the discard pile except the top card
       if (gameState.discardPile.length <= 1) {
@@ -1291,6 +1313,27 @@ const LocalGame: React.FC = () => {
         title: "Invalid move",
         description: "You can only draw a card during the draw phase.",
         variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if player already has 15 cards (should be 14 before drawing)
+    if (currentPlayer.hand.length >= 15) {
+      toast({
+        title: "Too many cards",
+        description:
+          "You already have the maximum number of cards. Please discard.",
+        variant: "destructive",
+      });
+      setGameState((prev) => {
+        if (!prev) return prev;
+        // Force move to meld phase if player somehow has too many cards
+        return {
+          ...prev,
+          gamePhase: "meld",
+          drawnFromDiscard: false,
+          drawnCard: null,
+        };
       });
       return;
     }
@@ -1616,9 +1659,10 @@ const LocalGame: React.FC = () => {
       player.meldPoints = 0;
     });
 
-    // Deal 14 cards to each player
-    for (let i = 0; i < 14; i++) {
-      for (let p = 0; p < newState.players.length; p++) {
+    // Deal exactly 14 cards to each player
+    for (let p = 0; p < newState.players.length; p++) {
+      newState.players[p].hand = []; // Ensure hand is empty
+      for (let i = 0; i < 14; i++) {
         if (deck.length > 0) {
           const card = deck.pop()!;
           newState.players[p].hand.push(card);

@@ -22,7 +22,6 @@ import {
   updatePlayerStatus,
   leaveGameSession,
   startGameSession,
-  simulatePlayerJoining,
   startSessionMonitoring,
   checkForExistingSession,
   type GameSession,
@@ -113,16 +112,38 @@ const Multiplayer = () => {
     }
   }, []);
 
+  // Poll for updates more frequently when waiting for players
+  useEffect(() => {
+    if (gameSession && gameSession.state === "waiting") {
+      const pollInterval = setInterval(() => {
+        if (gameId) {
+          getGameSession(gameId).then((updatedSession) => {
+            if (updatedSession && updatedSession.lastUpdated > lastUpdateTime) {
+              handleSessionUpdate(updatedSession);
+            }
+          });
+        }
+      }, 2000); // Poll every 2 seconds
+
+      return () => clearInterval(pollInterval);
+    }
+  }, [gameId, gameSession, lastUpdateTime]);
+
   // Handle session updates (called when session changes)
   const handleSessionUpdate = (updatedSession: GameSession) => {
     // Only update if it's actually a new update
     if (updatedSession.lastUpdated > lastUpdateTime) {
+      // Store previous session state before updating
+      const currentSession = gameSession;
+
+      // Update session state
       setGameSession(updatedSession);
       setLastUpdateTime(updatedSession.lastUpdated);
 
-      // Handle player join notifications
-      const currentSession = gameSession;
+      // Log updated session for debugging
+      console.log("Session updated:", updatedSession);
 
+      // Handle player join notifications
       if (
         currentSession &&
         updatedSession.players.length > currentSession.players.length
@@ -241,11 +262,6 @@ const Multiplayer = () => {
         title: "Game created",
         description: `Share code ${newGameId} with friends to join`,
       });
-
-      // Simulate another player joining after a delay (for demo purposes)
-      setTimeout(() => {
-        simulatePlayerJoining(newGameId);
-      }, 8000);
     } catch (error) {
       toast({
         title: "Error creating game",
@@ -390,10 +406,33 @@ const Multiplayer = () => {
         };
       });
 
+      // Force immediate UI update with a toast
+      toast({
+        title: "Starting game",
+        description: "The game is now starting...",
+      });
+
       // Then update the session in storage
       const success = await startGameSession(gameSession.id, playerId);
 
       if (success) {
+        // Double-check that the game state was updated
+        const updatedSession = await getGameSession(gameSession.id);
+        if (updatedSession && updatedSession.state !== "playing") {
+          // If not updated, force an update again
+          await startGameSession(gameSession.id, playerId);
+
+          // And update local state one more time
+          setGameSession((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              state: "playing",
+              lastUpdated: Date.now(),
+            };
+          });
+        }
+
         toast({
           title: "Game started",
           description: "The game has begun!",

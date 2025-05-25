@@ -1,10 +1,11 @@
 // This is a simplified real-time session management system that works with Render.com
-// It uses server-sent events and periodic polling as a fallback
+// It uses localStorage to persist game data across browser sessions
 
 // Session Storage Keys
 const GAME_ID_KEY = "current_game_id";
 const PLAYER_ID_KEY = "player_id";
-const POLLING_INTERVAL = 3000; // 3 seconds
+const POLLING_INTERVAL = 2000; // 2 seconds for faster updates
+const SESSION_STORAGE_KEY = "active_game_sessions";
 
 // Types for session management
 export type GameSession = {
@@ -23,9 +24,28 @@ export type SessionPlayer = {
   joinedAt: number;
 };
 
-// In-memory storage for active sessions (this would be a database in a real implementation)
-// For Render.com deployment this serves as a temporary mock
-const activeSessions: Record<string, GameSession> = {};
+// Load sessions from localStorage to maintain state between page reloads
+let activeSessions: Record<string, GameSession> = {};
+
+// Initialize from localStorage
+try {
+  const savedSessions = localStorage.getItem(SESSION_STORAGE_KEY);
+  if (savedSessions) {
+    activeSessions = JSON.parse(savedSessions);
+  }
+} catch (error) {
+  console.error("Error loading sessions from localStorage:", error);
+  activeSessions = {};
+}
+
+// Save sessions to localStorage whenever they change
+const saveSessions = () => {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(activeSessions));
+  } catch (error) {
+    console.error("Error saving sessions to localStorage:", error);
+  }
+};
 
 /**
  * Creates a new game session
@@ -55,17 +75,16 @@ export const createGameSession = (
       state: "waiting",
     };
 
-    // Store in local memory (in a real app, this would be sent to a server)
+    // Store in active sessions
     activeSessions[gameId] = session;
+    saveSessions();
 
     // Store locally for this client
     localStorage.setItem(GAME_ID_KEY, gameId);
     localStorage.setItem(PLAYER_ID_KEY, playerId);
 
-    // Simulate network delay
-    setTimeout(() => {
-      resolve({ gameId, playerId });
-    }, 500);
+    // Return immediately for better responsiveness
+    resolve({ gameId, playerId });
   });
 };
 
@@ -79,22 +98,11 @@ export const joinGameSession = (
   return new Promise((resolve) => {
     // Check if session exists
     if (!activeSessions[gameId]) {
-      // For demo, create it anyway so it works
-      activeSessions[gameId] = {
-        id: gameId,
-        hostId: "host_" + Math.random().toString(36).substring(2, 9),
-        players: [
-          {
-            id: "host_" + Math.random().toString(36).substring(2, 9),
-            name: "Host Player",
-            isReady: true,
-            isConnected: true,
-            joinedAt: Date.now() - 60000, // Joined a minute ago
-          },
-        ],
-        lastUpdated: Date.now(),
-        state: "waiting",
-      };
+      resolve({
+        success: false,
+        error: "Game session not found",
+      });
+      return;
     }
 
     // Generate player ID
@@ -130,15 +138,14 @@ export const joinGameSession = (
       joinedAt: Date.now(),
     });
     session.lastUpdated = Date.now();
+    saveSessions();
 
     // Store locally for this client
     localStorage.setItem(GAME_ID_KEY, gameId);
     localStorage.setItem(PLAYER_ID_KEY, playerId);
 
-    // Simulate network delay
-    setTimeout(() => {
-      resolve({ success: true, playerId });
-    }, 500);
+    // Return immediately for better responsiveness
+    resolve({ success: true, playerId });
   });
 };
 
@@ -147,10 +154,8 @@ export const joinGameSession = (
  */
 export const getGameSession = (gameId: string): Promise<GameSession | null> => {
   return new Promise((resolve) => {
-    // Simulate network delay
-    setTimeout(() => {
-      resolve(activeSessions[gameId] || null);
-    }, 200);
+    // Return immediately for better responsiveness
+    resolve(activeSessions[gameId] || null);
   });
 };
 
@@ -178,11 +183,10 @@ export const updatePlayerStatus = (
 
     session.players[playerIndex].isReady = isReady;
     session.lastUpdated = Date.now();
+    saveSessions();
 
-    // Simulate network delay
-    setTimeout(() => {
-      resolve(true);
-    }, 200);
+    // Return immediately for better responsiveness
+    resolve(true);
   });
 };
 
@@ -210,6 +214,11 @@ export const startGameSession = (
     // Update session state immediately
     session.state = "playing";
     session.lastUpdated = Date.now();
+    saveSessions();
+
+    // Log that the game has started for debugging
+    console.log(`Game ${gameId} started by host ${hostId}`);
+    console.log("Session state:", session);
 
     // Resolve immediately to avoid delays
     resolve(true);
@@ -264,40 +273,6 @@ export const leaveGameSession = (
   });
 };
 
-/**
- * Simulates a player joining the session (for demo purposes)
- */
-export const simulatePlayerJoining = (gameId: string): void => {
-  const session = activeSessions[gameId];
-  if (!session || session.state !== "waiting" || session.players.length >= 4) {
-    return;
-  }
-
-  // Generate random player
-  const randomName = `Player ${Math.floor(Math.random() * 100)}`;
-  const randomId = generatePlayerId();
-
-  // Add to session
-  session.players.push({
-    id: randomId,
-    name: randomName,
-    isReady: false,
-    isConnected: true,
-    joinedAt: Date.now(),
-  });
-
-  // Mark player as ready after a delay
-  setTimeout(
-    () => {
-      const playerIndex = session.players.findIndex((p) => p.id === randomId);
-      if (playerIndex !== -1) {
-        session.players[playerIndex].isReady = true;
-      }
-    },
-    Math.random() * 3000 + 2000,
-  );
-};
-
 // Utility functions
 function generateGameId(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -313,7 +288,7 @@ function generatePlayerId(): string {
 }
 
 // Session monitoring for real-time updates
-let pollingInterval: number | null = null;
+let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Starts monitoring a session for changes
@@ -329,8 +304,13 @@ export const startSessionMonitoring = (
     }
   });
 
+  // Clear any existing interval
+  if (pollingInterval !== null) {
+    clearInterval(pollingInterval);
+  }
+
   // Set up polling for updates
-  pollingInterval = window.setInterval(() => {
+  pollingInterval = setInterval(() => {
     getGameSession(gameId).then((session) => {
       if (session) {
         onSessionUpdate(session);
