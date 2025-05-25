@@ -26,7 +26,7 @@ import {
   checkForExistingSession,
   type GameSession,
   type SessionPlayer,
-} from "@/utils/sessionManager";
+} from "@/utils/firebaseSessionManager";
 
 // Types for multiplayer game
 type Card = {
