@@ -270,14 +270,16 @@ const canAddToMeld = (meld: Meld, card: Card): boolean => {
 
 // Find potential sets in a hand
 const findPotentialSets = (hand: Card[]): Card[][] => {
-  const rankGroups: Record<Rank, Card[]> = {} as Record<Rank, Card[]>;
+  const rankGroups: Record<string, Card[]> = {};
 
   // Group cards by rank
   hand.forEach((card) => {
-    if (!rankGroups[card.rank]) {
-      rankGroups[card.rank] = [];
+    if (!card.isJoker) {
+      if (!rankGroups[card.rank]) {
+        rankGroups[card.rank] = [];
+      }
+      rankGroups[card.rank].push(card);
     }
-    rankGroups[card.rank].push(card);
   });
 
   // Filter to sets with at least 3 cards or 2 cards + joker
@@ -391,88 +393,90 @@ const LocalGame: React.FC = () => {
     }
   }, [gameState?.winner, toast]);
 
-  // Start game with a human player and CPU opponents
-  const startGame = (playerCount: number) => {
-    try {
-      console.log("Starting game with", playerCount, "players");
+  // Initialize game with players and cards
+  const initializeGame = (playerCount: number) => {
+    const deck = createDeck();
+    const players: Player[] = [];
 
-      // Initialize game state
-      const deck = createDeck();
-      console.log("Deck created with", deck.length, "cards");
+    // Create human player
+    players.push({
+      id: "player1",
+      name: "You",
+      hand: [],
+      points: 0,
+      hasLaidInitial51: false,
+      meldPoints: 0,
+      isComputer: false,
+    });
 
-      const players: Player[] = [];
-
-      // Create human player
+    // Create CPU players
+    for (let i = 1; i < playerCount; i++) {
       players.push({
-        id: "player1",
-        name: "You",
+        id: `cpu${i}`,
+        name: `CPU ${i}`,
         hand: [],
         points: 0,
         hasLaidInitial51: false,
         meldPoints: 0,
-        isComputer: false,
+        isComputer: true,
       });
+    }
 
-      // Create CPU players
-      for (let i = 1; i < playerCount; i++) {
-        players.push({
-          id: `cpu${i}`,
-          name: `CPU ${i}`,
-          hand: [],
-          points: 0,
-          hasLaidInitial51: false,
-          meldPoints: 0,
-          isComputer: true,
+    // Deal exactly 14 cards to each player
+    for (let p = 0; p < players.length; p++) {
+      players[p].hand = []; // Ensure hand is empty
+      for (let i = 0; i < 14 && deck.length > 0; i++) {
+        const card = deck.pop()!;
+        players[p].hand.push(card);
+      }
+    }
+
+    // Initial discard pile with one card
+    const discardPile: Card[] = [];
+    if (deck.length > 0) {
+      discardPile.push(deck.pop()!);
+    }
+
+    return {
+      deck,
+      players,
+      currentPlayerIndex: 0,
+      discardPile,
+      melds: [],
+      gamePhase: "draw",
+      winner: null,
+      roundScores: {},
+      currentRound: 1,
+      drawnFromDiscard: false,
+      drawnCard: null,
+      cleanWinPossible: true,
+      cpuThinking: false,
+    };
+  };
+
+  // Start the game safely
+  const startGame = () => {
+    try {
+      const count = parseInt(numPlayers);
+      if (isNaN(count) || count < 2 || count > 4) {
+        toast({
+          title: "Invalid player count",
+          description: "Please select a valid number of players (2-4)",
+          variant: "destructive",
         });
+        return;
       }
 
-      console.log("Created", players.length, "players");
+      // Initialize game state first
+      const initialState = initializeGame(count);
 
-      // Deal exactly 14 cards to each player
-      for (let p = 0; p < players.length; p++) {
-        players[p].hand = []; // Ensure hand is empty
-        for (let i = 0; i < 14 && deck.length > 0; i++) {
-          const card = deck.pop()!;
-          players[p].hand.push(card);
-        }
+      // Set the game state
+      setGameState(initialState);
 
-        // Verify each player has exactly 14 cards
-        console.log(`Player ${p} has ${players[p].hand.length} cards`);
-      }
-
-      // Initial discard pile with one card
-      const discardPile: Card[] = [];
-      if (deck.length > 0) {
-        discardPile.push(deck.pop()!);
-      }
-
-      const newGameState = {
-        deck,
-        players,
-        currentPlayerIndex: 0,
-        discardPile,
-        melds: [],
-        gamePhase: "draw",
-        winner: null,
-        roundScores: {},
-        currentRound: 1,
-        drawnFromDiscard: false,
-        drawnCard: null,
-        cleanWinPossible: true, // At the start of the game, a clean win is possible
-        cpuThinking: false,
-      };
-
-      console.log("Game state initialized:", newGameState);
-
-      // First set state
-      setGameState(newGameState);
-
-      // Then update the UI
+      // Then update the UI after a small delay
       setTimeout(() => {
         setShowSetup(false);
-      }, 100);
-
-      console.log("Game started successfully");
+      }, 50);
     } catch (error) {
       console.error("Error starting game:", error);
       toast({
@@ -1058,7 +1062,7 @@ const LocalGame: React.FC = () => {
 
   // Check for clean win (Rami Ndhif)
   const checkForCleanWin = (state = gameState): boolean => {
-    if (!state || !state.currentPlayer) return false;
+    if (!state || !state.players[state.currentPlayerIndex]) return false;
 
     const player = state.players[state.currentPlayerIndex];
     return (
@@ -1097,7 +1101,7 @@ const LocalGame: React.FC = () => {
   }, [gameState]);
 
   // If game state is null, return setup screen
-  if (!gameState) {
+  if (showSetup) {
     return (
       <div
         className="min-h-screen bg-brown-900 flex items-center justify-center p-4 text-white"
@@ -1120,11 +1124,14 @@ const LocalGame: React.FC = () => {
                 <Label htmlFor="numPlayers" className="text-white">
                   Number of Players (including you)
                 </Label>
-                <Select value={numPlayers} onValueChange={setNumPlayers}>
+                <Select
+                  defaultValue="2"
+                  onValueChange={(value) => setNumPlayers(value)}
+                >
                   <SelectTrigger className="bg-white/10 border-white/20 text-white">
                     <SelectValue placeholder="Select number of players" />
                   </SelectTrigger>
-                  <SelectContent className="z-50">
+                  <SelectContent>
                     <SelectItem value="2">2 Players (You + 1 CPU)</SelectItem>
                     <SelectItem value="3">3 Players (You + 2 CPUs)</SelectItem>
                     <SelectItem value="4">4 Players (You + 3 CPUs)</SelectItem>
@@ -1132,17 +1139,7 @@ const LocalGame: React.FC = () => {
                 </Select>
               </div>
 
-              <Button
-                onClick={() => {
-                  try {
-                    startGame(parseInt(numPlayers));
-                    console.log("Game start initiated");
-                  } catch (e) {
-                    console.error("Error in start game click handler:", e);
-                  }
-                }}
-                className="w-full"
-              >
+              <Button onClick={startGame} className="w-full">
                 Start Game
               </Button>
 
@@ -1733,26 +1730,6 @@ const LocalGame: React.FC = () => {
         const card = deck.pop()!;
         newState.players[p].hand.push(card);
       }
-
-      // Double-check each player has exactly 14 cards
-      if (newState.players[p].hand.length !== 14) {
-        console.error(
-          `Round ${newState.currentRound}: Player ${p} has ${newState.players[p].hand.length} cards instead of 14`,
-        );
-        // If not enough cards in deck, take from players with more than 14
-        while (newState.players[p].hand.length < 14) {
-          let cardFound = false;
-          for (let otherP = 0; otherP < newState.players.length; otherP++) {
-            if (otherP !== p && newState.players[otherP].hand.length > 14) {
-              const card = newState.players[otherP].hand.pop()!;
-              newState.players[p].hand.push(card);
-              cardFound = true;
-              break;
-            }
-          }
-          if (!cardFound) break; // Can't find more cards
-        }
-      }
     }
 
     // Set up discard pile
@@ -1782,20 +1759,6 @@ const LocalGame: React.FC = () => {
     setShowSetup(true);
     setGameState(null);
   };
-
-  // Debug function to check card counts
-  useEffect(() => {
-    if (gameState && gameState.gamePhase !== "draw") {
-      // Check if any player has more than 14 cards
-      gameState.players.forEach((player, index) => {
-        if (player.hand.length > 14) {
-          console.warn(
-            `Player ${player.name} has ${player.hand.length} cards, which exceeds the maximum of 14.`,
-          );
-        }
-      });
-    }
-  }, [gameState?.currentPlayerIndex, gameState?.gamePhase]);
 
   return (
     <div
