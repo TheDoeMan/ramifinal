@@ -207,14 +207,12 @@ export const startGameSession = (
       return;
     }
 
-    // Update session state
+    // Update session state immediately
     session.state = "playing";
     session.lastUpdated = Date.now();
 
-    // Simulate network delay
-    setTimeout(() => {
-      resolve(true);
-    }, 500);
+    // Resolve immediately to avoid delays
+    resolve(true);
   });
 };
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { GameCard, Suit, Rank } from "@/components/GameCard";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
@@ -45,6 +45,7 @@ type Player = {
   points: number;
   hasLaidInitial51: boolean;
   meldPoints: number;
+  isComputer: boolean;
 };
 
 // Define game state
@@ -61,6 +62,7 @@ type GameState = {
   drawnFromDiscard: boolean;
   drawnCard: Card | null;
   cleanWinPossible: boolean;
+  cpuThinking: boolean;
 };
 
 // Card values
@@ -266,6 +268,110 @@ const canAddToMeld = (meld: Meld, card: Card): boolean => {
   return false;
 };
 
+// Find potential sets in a hand
+const findPotentialSets = (hand: Card[]): Card[][] => {
+  const rankGroups: Record<Rank, Card[]> = {} as Record<Rank, Card[]>;
+
+  // Group cards by rank
+  hand.forEach((card) => {
+    if (!rankGroups[card.rank]) {
+      rankGroups[card.rank] = [];
+    }
+    rankGroups[card.rank].push(card);
+  });
+
+  // Filter to sets with at least 3 cards or 2 cards + joker
+  const jokers = hand.filter((card) => card.isJoker);
+  const potentialSets: Card[][] = [];
+
+  Object.values(rankGroups).forEach((cards) => {
+    if (cards.length >= 3) {
+      // Valid set without joker
+      potentialSets.push(cards);
+    } else if (cards.length === 2 && jokers.length > 0) {
+      // Valid set with one joker
+      potentialSets.push([...cards, jokers[0]]);
+    }
+  });
+
+  return potentialSets;
+};
+
+// Find potential runs in a hand
+const findPotentialRuns = (hand: Card[]): Card[][] => {
+  const suitGroups: Record<Suit, Card[]> = {
+    hearts: [],
+    diamonds: [],
+    clubs: [],
+    spades: [],
+  };
+
+  // Group cards by suit
+  hand.forEach((card) => {
+    if (!card.isJoker) {
+      suitGroups[card.suit].push(card);
+    }
+  });
+
+  const potentialRuns: Card[][] = [];
+  const jokers = hand.filter((card) => card.isJoker);
+
+  // Check each suit for runs
+  Object.values(suitGroups).forEach((cards) => {
+    if (cards.length >= 2) {
+      // Need at least 2 cards + joker or 3 cards
+      // Sort by value
+      const sortedCards = [...cards].sort((a, b) => a.value - b.value);
+
+      // Find consecutive sequences
+      for (let i = 0; i < sortedCards.length - 2; i++) {
+        for (let j = i + 1; j < sortedCards.length; j++) {
+          const potentialRun = sortedCards.slice(i, j + 1);
+          const isConsecutive = isConsecutiveSequence(potentialRun);
+
+          if (isConsecutive && potentialRun.length >= 3) {
+            potentialRuns.push(potentialRun);
+          } else if (
+            jokers.length > 0 &&
+            potentialRun.length >= 2 &&
+            canFormRunWithJoker(potentialRun)
+          ) {
+            potentialRuns.push([...potentialRun, jokers[0]]);
+          }
+        }
+      }
+    }
+  });
+
+  return potentialRuns;
+};
+
+// Check if a sequence is consecutive
+const isConsecutiveSequence = (cards: Card[]): boolean => {
+  const sortedValues = [...cards].sort((a, b) => a.value - b.value);
+
+  for (let i = 1; i < sortedValues.length; i++) {
+    if (sortedValues[i].value !== sortedValues[i - 1].value + 1) {
+      return false;
+    }
+  }
+  return true;
+};
+
+// Check if cards can form a run with one joker
+const canFormRunWithJoker = (cards: Card[]): boolean => {
+  const sortedValues = [...cards].sort((a, b) => a.value - b.value);
+
+  // Check if adding one card can make it consecutive
+  for (let i = 1; i < sortedValues.length; i++) {
+    if (sortedValues[i].value > sortedValues[i - 1].value + 2) {
+      return false; // Gap too large for one joker
+    }
+  }
+  return true;
+};
+
+// The main game component
 const LocalGame: React.FC = () => {
   const { toast } = useToast();
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
@@ -275,7 +381,7 @@ const LocalGame: React.FC = () => {
   const [numPlayers, setNumPlayers] = useState<string>("2");
   const [gameState, setGameState] = useState<GameState | null>(null);
 
-  // Show winner message - MOVED here to ensure consistent hook order
+  // Show winner message
   useEffect(() => {
     if (gameState?.winner) {
       toast({
@@ -285,20 +391,33 @@ const LocalGame: React.FC = () => {
     }
   }, [gameState?.winner, toast]);
 
+  // Start game with a human player and CPU opponents
   const startGame = (playerCount: number) => {
     // Initialize game state
     const deck = createDeck();
     const players: Player[] = [];
 
-    // Create players
-    for (let i = 0; i < playerCount; i++) {
+    // Create human player
+    players.push({
+      id: "player1",
+      name: "You",
+      hand: [],
+      points: 0,
+      hasLaidInitial51: false,
+      meldPoints: 0,
+      isComputer: false,
+    });
+
+    // Create CPU players
+    for (let i = 1; i < playerCount; i++) {
       players.push({
-        id: `player${i + 1}`,
-        name: `Player ${i + 1}`,
+        id: `cpu${i}`,
+        name: `CPU ${i}`,
         hand: [],
         points: 0,
         hasLaidInitial51: false,
         meldPoints: 0,
+        isComputer: true,
       });
     }
 
@@ -331,6 +450,7 @@ const LocalGame: React.FC = () => {
       drawnFromDiscard: false,
       drawnCard: null,
       cleanWinPossible: true, // At the start of the game, a clean win is possible
+      cpuThinking: false,
     });
 
     setShowSetup(false);
@@ -339,7 +459,581 @@ const LocalGame: React.FC = () => {
   // Calculate current player - safe access with optional chaining
   const currentPlayer = gameState?.players?.[gameState.currentPlayerIndex];
 
-  // If game state is null, return early
+  // CPU player AI logic - move maker
+  const makeCPUMove = useCallback(() => {
+    if (!gameState || !currentPlayer || !currentPlayer.isComputer) return;
+
+    // Set CPU as thinking to show animation
+    setGameState((prev) => {
+      if (!prev) return prev;
+      return { ...prev, cpuThinking: true };
+    });
+
+    // Delay to simulate thinking
+    setTimeout(() => {
+      if (gameState.gamePhase === "draw") {
+        // DRAW PHASE
+        const shouldDrawFromDiscard = decideCPUDrawSource();
+
+        if (shouldDrawFromDiscard && gameState.discardPile.length > 0) {
+          handleCPUDrawFromDiscard();
+        } else {
+          handleCPUDrawFromDeck();
+        }
+      } else if (gameState.gamePhase === "meld") {
+        // MELD PHASE
+        // Automatically organize cards first
+        organizeCPUCards();
+
+        // Find and make the best melds
+        const madeAMeld = makeCPUMelds();
+
+        // After melds (or if no melds possible), discard worst card
+        handleCPUDiscard();
+      }
+    }, 1500); // 1.5 second thinking time
+  }, [gameState, currentPlayer]);
+
+  // Decide whether CPU should draw from discard pile
+  const decideCPUDrawSource = () => {
+    if (!gameState || !currentPlayer) return false;
+
+    // If discard pile is empty, must draw from deck
+    if (gameState.discardPile.length === 0) return false;
+
+    const topDiscard = gameState.discardPile[gameState.discardPile.length - 1];
+
+    // Check if the discard can complete a set or run
+    const hand = currentPlayer.hand;
+
+    // Check for potential sets with the discard
+    const rankMatches = hand.filter(
+      (c) => c.rank === topDiscard.rank && c.suit !== topDiscard.suit,
+    );
+    if (rankMatches.length >= 2) return true; // Can form a set
+
+    // Check for potential runs with the discard
+    const suitMatches = hand.filter((c) => c.suit === topDiscard.suit);
+    const sortedByValue = [...suitMatches].sort((a, b) => a.value - b.value);
+
+    // Check if discard can extend a sequence
+    for (let i = 0; i < sortedByValue.length - 1; i++) {
+      // Check for consecutive values that the discard could connect
+      if (
+        (topDiscard.value === sortedByValue[i].value + 1 &&
+          topDiscard.value === sortedByValue[i + 1].value - 1) ||
+        (topDiscard.value === sortedByValue[i].value - 1 &&
+          sortedByValue.some((c) => c.value === topDiscard.value + 1))
+      ) {
+        return true;
+      }
+    }
+
+    // 30% chance to draw from discard anyway (to make CPU behavior less predictable)
+    return Math.random() < 0.3;
+  };
+
+  // CPU draws from deck
+  const handleCPUDrawFromDeck = () => {
+    setGameState((prev) => {
+      if (!prev) return prev;
+      const newState = { ...prev };
+
+      if (newState.deck.length === 0) {
+        // If deck is empty, shuffle the discard pile except the top card
+        if (newState.discardPile.length <= 1) {
+          // End round if no cards available
+          return endRound(newState);
+        }
+
+        const topCard = newState.discardPile.pop()!;
+        newState.deck = shuffleDeck(newState.discardPile);
+        newState.discardPile = [topCard];
+      }
+
+      const card = newState.deck.pop()!;
+      newState.players[newState.currentPlayerIndex].hand.push(card);
+      newState.gamePhase = "meld";
+      newState.drawnFromDiscard = false;
+      newState.drawnCard = card;
+      newState.cpuThinking = false;
+
+      return newState;
+    });
+  };
+
+  // CPU draws from discard pile
+  const handleCPUDrawFromDiscard = () => {
+    setGameState((prev) => {
+      if (!prev) return prev;
+      const newState = { ...prev };
+
+      const card = newState.discardPile.pop()!;
+      newState.players[newState.currentPlayerIndex].hand.push(card);
+      newState.gamePhase = "meld";
+      newState.drawnFromDiscard = true;
+      newState.drawnCard = card;
+      newState.cpuThinking = false;
+
+      return newState;
+    });
+  };
+
+  // Organize CPU cards for better melds
+  const organizeCPUCards = () => {
+    setGameState((prev) => {
+      if (!prev) return prev;
+      const newState = { ...prev };
+
+      // Sort by suit then by rank
+      const sortedHand = [
+        ...newState.players[newState.currentPlayerIndex].hand,
+      ].sort((a, b) => {
+        // First by suit
+        if (a.suit !== b.suit) {
+          const suitOrder = { hearts: 0, diamonds: 1, clubs: 2, spades: 3 };
+          return suitOrder[a.suit] - suitOrder[b.suit];
+        }
+        // Then by value
+        return a.value - b.value;
+      });
+
+      newState.players[newState.currentPlayerIndex].hand = sortedHand;
+      return newState;
+    });
+  };
+
+  // Make CPU melds if possible
+  const makeCPUMelds = () => {
+    if (!gameState || !currentPlayer) return false;
+
+    // Check if CPU has laid down 51+ points
+    const hasLaidInitial = currentPlayer.hasLaidInitial51;
+
+    // Try to use drawn card from discard if necessary
+    if (gameState.drawnFromDiscard && gameState.drawnCard) {
+      const drawnCard = gameState.drawnCard;
+
+      // Find cards that can form a valid meld with the drawn card
+      const hand = currentPlayer.hand;
+      let meldFound = false;
+
+      // Try to form a set first
+      const sameRankCards = hand.filter(
+        (c) => c.rank === drawnCard.rank && c.id !== drawnCard.id,
+      );
+      if (sameRankCards.length >= 2) {
+        // We can make a set
+        const setCards = [...sameRankCards.slice(0, 2), drawnCard];
+
+        // Check if this is the first meld and meets point requirement
+        const points = calculatePoints(setCards);
+        if (!hasLaidInitial && points < FIRST_MELD_POINTS) {
+          // Need more points, try to add more cards to the set
+          const additionalSameRankCards = hand
+            .filter(
+              (c) =>
+                c.rank === drawnCard.rank &&
+                c.id !== drawnCard.id &&
+                !setCards.some((sc) => sc.id === c.id),
+            )
+            .slice(0, 1); // Add at most 1 more card
+
+          if (additionalSameRankCards.length > 0) {
+            setCards.push(...additionalSameRankCards);
+          }
+        }
+
+        if (hasLaidInitial || calculatePoints(setCards) >= FIRST_MELD_POINTS) {
+          createCPUMeld(setCards, "set");
+          meldFound = true;
+        }
+      }
+
+      // If we couldn't form a set, try a run
+      if (!meldFound) {
+        const sameSuitCards = hand.filter(
+          (c) => c.suit === drawnCard.suit && c.id !== drawnCard.id,
+        );
+
+        // Sort by value
+        const sortedSameSuit = [...sameSuitCards].sort(
+          (a, b) => a.value - b.value,
+        );
+
+        // Look for consecutive cards
+        for (let i = 0; i < sortedSameSuit.length - 1; i++) {
+          const potentialRun = [];
+          potentialRun.push(sortedSameSuit[i]);
+
+          // Find consecutive cards
+          for (let j = i + 1; j < sortedSameSuit.length; j++) {
+            if (
+              sortedSameSuit[j].value ===
+              potentialRun[potentialRun.length - 1].value + 1
+            ) {
+              potentialRun.push(sortedSameSuit[j]);
+            }
+          }
+
+          // Check if drawn card extends the run
+          if (
+            drawnCard.value === potentialRun[0].value - 1 ||
+            drawnCard.value === potentialRun[potentialRun.length - 1].value + 1
+          ) {
+            potentialRun.push(drawnCard);
+
+            // Sort to ensure proper order
+            potentialRun.sort((a, b) => a.value - b.value);
+
+            if (
+              potentialRun.length >= 3 &&
+              (hasLaidInitial ||
+                calculatePoints(potentialRun) >= FIRST_MELD_POINTS)
+            ) {
+              createCPUMeld(potentialRun, "run");
+              meldFound = true;
+              break;
+            }
+          }
+        }
+      }
+
+      return meldFound;
+    }
+
+    // If not forced to use discard or already handled it, make best possible melds
+    // First, check for first meld requirements
+    if (!hasLaidInitial) {
+      // Find highest point combinations
+      const potentialSets = findPotentialSets(currentPlayer.hand);
+      const potentialRuns = findPotentialRuns(currentPlayer.hand);
+
+      // Combine all potential melds and sort by points
+      const allPotentialMelds = [...potentialSets, ...potentialRuns]
+        .filter(
+          (meld) => meld.length >= 3 && (isValidSet(meld) || isValidRun(meld)),
+        )
+        .sort((a, b) => calculatePoints(b) - calculatePoints(a));
+
+      // Find a meld or combination that meets 51+ points
+      for (const meld of allPotentialMelds) {
+        const points = calculatePoints(meld);
+        if (points >= FIRST_MELD_POINTS) {
+          const meldType = isValidSet(meld) ? "set" : "run";
+          createCPUMeld(meld, meldType);
+          return true;
+        }
+      }
+
+      // Check if any two melds combined reach 51+ points
+      for (let i = 0; i < allPotentialMelds.length - 1; i++) {
+        for (let j = i + 1; j < allPotentialMelds.length; j++) {
+          // Make sure the melds don't share cards
+          const meld1 = allPotentialMelds[i];
+          const meld2 = allPotentialMelds[j];
+
+          const meld1CardIds = new Set(meld1.map((c) => c.id));
+          const meld2Unique = meld2.every((c) => !meld1CardIds.has(c.id));
+
+          if (meld2Unique) {
+            const totalPoints = calculatePoints(meld1) + calculatePoints(meld2);
+            if (totalPoints >= FIRST_MELD_POINTS) {
+              // Create both melds
+              const meld1Type = isValidSet(meld1) ? "set" : "run";
+              createCPUMeld(meld1, meld1Type);
+
+              // Update state to reflect the first meld
+              const meld2Type = isValidSet(meld2) ? "set" : "run";
+              setTimeout(() => {
+                createCPUMeld(meld2, meld2Type);
+              }, 300);
+
+              return true;
+            }
+          }
+        }
+      }
+
+      // If we can't meet 51+ points, don't make any melds
+      return false;
+    } else {
+      // Already laid initial meld, so create any valid melds
+      const potentialSets = findPotentialSets(currentPlayer.hand);
+      const potentialRuns = findPotentialRuns(currentPlayer.hand);
+
+      let madeAMeld = false;
+
+      // Try sets first
+      for (const set of potentialSets) {
+        if (set.length >= 3 && isValidSet(set)) {
+          createCPUMeld(set, "set");
+          madeAMeld = true;
+          break;
+        }
+      }
+
+      // Then try runs if we didn't make a set
+      if (!madeAMeld) {
+        for (const run of potentialRuns) {
+          if (run.length >= 3 && isValidRun(run)) {
+            createCPUMeld(run, "run");
+            madeAMeld = true;
+            break;
+          }
+        }
+      }
+
+      // Try adding to existing melds
+      if (gameState.melds.length > 0) {
+        for (const meld of gameState.melds) {
+          for (const card of currentPlayer.hand) {
+            if (canAddToMeld(meld, card)) {
+              addCPUCardToMeld(meld, card);
+              madeAMeld = true;
+              break;
+            }
+          }
+          if (madeAMeld) break;
+        }
+      }
+
+      return madeAMeld;
+    }
+  };
+
+  // Create a meld for CPU player
+  const createCPUMeld = (cards: Card[], meldType: "set" | "run") => {
+    setGameState((prev) => {
+      if (!prev) return prev;
+      const newState = { ...prev };
+
+      // Calculate points for reporting
+      const pointsInMeld = calculatePoints(cards);
+
+      // Remove cards from player's hand
+      const playerHand = newState.players[newState.currentPlayerIndex].hand;
+      const cardIds = new Set(cards.map((c) => c.id));
+      newState.players[newState.currentPlayerIndex].hand = playerHand.filter(
+        (card) => !cardIds.has(card.id),
+      );
+
+      // If card was drawn from discard, mark it as used
+      if (newState.drawnFromDiscard) {
+        const drawnCardUsed = cards.some(
+          (c) => c.id === newState.drawnCard?.id,
+        );
+        if (drawnCardUsed) {
+          newState.drawnFromDiscard = false;
+          newState.drawnCard = null;
+        }
+      }
+
+      // Update player's meld status if this is their first meld
+      if (!newState.players[newState.currentPlayerIndex].hasLaidInitial51) {
+        newState.players[newState.currentPlayerIndex].hasLaidInitial51 = true;
+        newState.players[newState.currentPlayerIndex].meldPoints = pointsInMeld;
+      }
+
+      // Add meld
+      newState.melds.push({
+        id: `meld-${Date.now()}-${Math.random()}`,
+        cards: cards,
+        type: meldType,
+        playerId: newState.players[newState.currentPlayerIndex].id,
+      });
+
+      // Show notification
+      toast({
+        title: `${newState.players[newState.currentPlayerIndex].name} created a meld`,
+        description: `A ${meldType} worth ${pointsInMeld} points`,
+      });
+
+      return newState;
+    });
+  };
+
+  // Add card to existing meld for CPU
+  const addCPUCardToMeld = (meld: Meld, card: Card) => {
+    setGameState((prev) => {
+      if (!prev) return prev;
+      const newState = { ...prev };
+
+      // Remove card from player's hand
+      const playerHand = newState.players[newState.currentPlayerIndex].hand;
+      newState.players[newState.currentPlayerIndex].hand = playerHand.filter(
+        (c) => c.id !== card.id,
+      );
+
+      // If this is the card drawn from discard, mark it as used
+      if (newState.drawnFromDiscard && newState.drawnCard?.id === card.id) {
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = null;
+      }
+
+      // Add card to the meld
+      const meldIndex = newState.melds.findIndex((m) => m.id === meld.id);
+
+      if (newState.melds[meldIndex].type === "run") {
+        // For runs, maintain order
+        const cardValue = card.value;
+        const values = newState.melds[meldIndex].cards
+          .filter((c) => !c.isJoker)
+          .map((c) => c.value)
+          .sort((a, b) => a - b);
+
+        if (!card.isJoker && cardValue < values[0]) {
+          // Add to beginning
+          newState.melds[meldIndex].cards.unshift(card);
+        } else {
+          // Add to end
+          newState.melds[meldIndex].cards.push(card);
+        }
+      } else {
+        // For sets, just add the card
+        newState.melds[meldIndex].cards.push(card);
+      }
+
+      // A clean win is no longer possible
+      newState.cleanWinPossible = false;
+
+      toast({
+        title: `${newState.players[newState.currentPlayerIndex].name} added to a meld`,
+        description: `Added a card to an existing ${newState.melds[meldIndex].type}`,
+      });
+
+      return newState;
+    });
+  };
+
+  // CPU discard phase
+  const handleCPUDiscard = () => {
+    if (!gameState || !currentPlayer) return;
+
+    setGameState((prev) => {
+      if (!prev) return prev;
+      const newState = { ...prev };
+      const hand = newState.players[newState.currentPlayerIndex].hand;
+
+      // If drawn card from discard pile wasn't used, we can't discard it
+      if (newState.drawnFromDiscard && newState.drawnCard) {
+        toast({
+          title: "CPU player stuck",
+          description: "CPU player can't use the drawn discard card in a meld",
+        });
+
+        // Force adding discard to hand and continue
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = null;
+      }
+
+      // If the player has no cards left (clean win)
+      if (hand.length === 0) {
+        // End the round with a winner
+        return endRoundWithWinner(newState, checkForCleanWin(newState));
+      }
+
+      // Select worst card to discard
+      let cardToDiscard: Card;
+
+      // Discard strategy:
+      // 1. High-value cards that don't form melds
+      // 2. Cards that don't contribute to potential melds
+      // 3. Highest value card
+
+      // Sort by value (highest first)
+      const sortedByValue = [...hand].sort((a, b) => b.value - a.value);
+
+      // Never discard jokers if there are other cards
+      const nonJokers = sortedByValue.filter((c) => !c.isJoker);
+      if (nonJokers.length > 0) {
+        // For each high value card, check if it's part of a potential meld
+        for (const card of nonJokers) {
+          // Skip if card is part of potential meld
+          const remainingHand = hand.filter((c) => c.id !== card.id);
+
+          // Check if card forms potential set
+          const sameRankCards = remainingHand.filter(
+            (c) => c.rank === card.rank,
+          );
+          if (sameRankCards.length >= 2) continue; // Part of potential set
+
+          // Check if card forms potential run
+          const sameSuitCards = remainingHand.filter(
+            (c) => c.suit === card.suit,
+          );
+          const isPartOfRun = sameSuitCards.some(
+            (c) =>
+              Math.abs(c.value - card.value) === 1 ||
+              Math.abs(c.value - card.value) === 2,
+          );
+          if (isPartOfRun) continue; // Part of potential run
+
+          // This card is not useful, discard it
+          cardToDiscard = card;
+          break;
+        }
+      }
+
+      // If we didn't find a card to discard, use the highest value card
+      if (!cardToDiscard && nonJokers.length > 0) {
+        cardToDiscard = nonJokers[0]; // Highest value non-joker
+      } else if (!cardToDiscard) {
+        cardToDiscard = hand[0]; // If only jokers, discard first one
+      }
+
+      // Remove from hand
+      newState.players[newState.currentPlayerIndex].hand = hand.filter(
+        (c) => c.id !== cardToDiscard.id,
+      );
+
+      // Add to discard pile
+      newState.discardPile.push(cardToDiscard);
+
+      // Check if player has won
+      if (newState.players[newState.currentPlayerIndex].hand.length === 0) {
+        // End the round with a winner
+        return endRoundWithWinner(newState, checkForCleanWin(newState));
+      } else {
+        // Move to next player
+        newState.currentPlayerIndex =
+          (newState.currentPlayerIndex + 1) % newState.players.length;
+        newState.gamePhase = "draw";
+        newState.drawnFromDiscard = false;
+        newState.drawnCard = null;
+        newState.cleanWinPossible = false; // Reset for next player
+        newState.cpuThinking = false;
+      }
+
+      return newState;
+    });
+  };
+
+  // Check for clean win (Rami Ndhif)
+  const checkForCleanWin = (state = gameState): boolean => {
+    if (!state || !state.currentPlayer) return false;
+
+    const player = state.players[state.currentPlayerIndex];
+    return (
+      state.cleanWinPossible &&
+      !player.hasLaidInitial51 &&
+      state.melds.filter((m) => m.playerId === player.id).length === 0 &&
+      player.hand.length === (state.drawnCard ? 1 : 0)
+    );
+  };
+
+  // Run CPU moves when it's their turn
+  useEffect(() => {
+    if (gameState && currentPlayer?.isComputer && !gameState.cpuThinking) {
+      const timer = setTimeout(() => {
+        makeCPUMove();
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [gameState, currentPlayer, makeCPUMove]);
+
+  // If game state is null, return setup screen
   if (!gameState) {
     return (
       <div
@@ -355,22 +1049,22 @@ const LocalGame: React.FC = () => {
         <div className="w-full max-w-md">
           <div className="bg-black/20 backdrop-blur-md rounded-xl p-8 border border-white/10 shadow-2xl">
             <h1 className="text-3xl font-bold text-white mb-6 text-shadow">
-              Tunisian Rami
+              Tunisian Rami vs CPU
             </h1>
 
             <div className="space-y-6">
               <div className="space-y-2">
                 <Label htmlFor="numPlayers" className="text-white">
-                  Number of Players
+                  Number of Players (including you)
                 </Label>
                 <Select value={numPlayers} onValueChange={setNumPlayers}>
                   <SelectTrigger className="bg-white/10 border-white/20 text-white">
                     <SelectValue placeholder="Select number of players" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="2">2 Players</SelectItem>
-                    <SelectItem value="3">3 Players</SelectItem>
-                    <SelectItem value="4">4 Players</SelectItem>
+                    <SelectItem value="2">2 Players (You + 1 CPU)</SelectItem>
+                    <SelectItem value="3">3 Players (You + 2 CPUs)</SelectItem>
+                    <SelectItem value="4">4 Players (You + 3 CPUs)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -420,7 +1114,7 @@ const LocalGame: React.FC = () => {
 
   // Handle card selection
   const handleCardClick = (card: Card) => {
-    if (gameState.gamePhase === "gameOver") return;
+    if (gameState.gamePhase === "gameOver" || currentPlayer.isComputer) return;
 
     // If a meld is selected, try to add this card to the meld
     if (selectedMeld && gameState.gamePhase === "meld") {
@@ -451,7 +1145,7 @@ const LocalGame: React.FC = () => {
 
   // Handle meld selection for adding cards
   const handleMeldClick = (meld: Meld) => {
-    if (gameState.gamePhase !== "meld") return;
+    if (gameState.gamePhase !== "meld" || currentPlayer.isComputer) return;
 
     // Can only add to your own melds before first meld
     if (!currentPlayer.hasLaidInitial51 && meld.playerId !== currentPlayer.id) {
@@ -474,7 +1168,7 @@ const LocalGame: React.FC = () => {
 
   // Add a card to an existing meld
   const addCardToMeld = (meld: Meld, card: Card) => {
-    if (gameState.gamePhase !== "meld") return;
+    if (gameState.gamePhase !== "meld" || currentPlayer.isComputer) return;
 
     // If card was drawn from discard, check if it's being used
     if (gameState.drawnFromDiscard && gameState.drawnCard?.id === card.id) {
@@ -540,7 +1234,7 @@ const LocalGame: React.FC = () => {
 
   // Draw card from deck
   const drawFromDeck = () => {
-    if (gameState.gamePhase !== "draw") {
+    if (gameState.gamePhase !== "draw" || currentPlayer.isComputer) {
       toast({
         title: "Invalid move",
         description: "You can only draw a card during the draw phase.",
@@ -592,7 +1286,7 @@ const LocalGame: React.FC = () => {
 
   // Draw card from discard pile
   const drawFromDiscardPile = () => {
-    if (gameState.gamePhase !== "draw") {
+    if (gameState.gamePhase !== "draw" || currentPlayer.isComputer) {
       toast({
         title: "Invalid move",
         description: "You can only draw a card during the draw phase.",
@@ -629,7 +1323,7 @@ const LocalGame: React.FC = () => {
 
   // Create a meld from selected cards
   const createMeld = () => {
-    if (gameState.gamePhase !== "meld") {
+    if (gameState.gamePhase !== "meld" || currentPlayer.isComputer) {
       toast({
         title: "Invalid move",
         description: "You can only create melds during the meld phase.",
@@ -736,7 +1430,7 @@ const LocalGame: React.FC = () => {
 
   // Discard a card
   const discardCard = () => {
-    if (gameState.gamePhase !== "meld") {
+    if (gameState.gamePhase !== "meld" || currentPlayer.isComputer) {
       toast({
         title: "Invalid move",
         description: "You can only discard a card after drawing.",
@@ -806,17 +1500,6 @@ const LocalGame: React.FC = () => {
     setSelectedCards([]);
   };
 
-  // Check for clean win (Rami Ndhif)
-  const checkForCleanWin = (): boolean => {
-    return (
-      gameState.cleanWinPossible &&
-      !currentPlayer.hasLaidInitial51 &&
-      gameState.melds.filter((m) => m.playerId === currentPlayer.id).length ===
-        0 &&
-      currentPlayer.hand.length === (gameState.drawnCard ? 1 : 0)
-    );
-  };
-
   // End round with a winner
   const endRoundWithWinner = (
     currentState: GameState,
@@ -877,48 +1560,43 @@ const LocalGame: React.FC = () => {
   };
 
   // End the round without a winner
-  const endRound = () => {
-    setGameState((prev) => {
-      if (!prev) return prev;
-      const newState = { ...prev };
+  const endRound = (currentState = gameState) => {
+    if (!currentState) return currentState;
 
-      // Calculate points for all players
-      let roundScores = { ...newState.roundScores };
+    const newState = { ...currentState };
 
-      newState.players.forEach((player) => {
-        const points = calculatePoints(player.hand);
-        player.points += points;
+    // Calculate points for all players
+    let roundScores = { ...newState.roundScores };
 
-        // Update round scores
-        roundScores[player.id] = (roundScores[player.id] || 0) + points;
-      });
+    newState.players.forEach((player) => {
+      const points = calculatePoints(player.hand);
+      player.points += points;
 
-      newState.roundScores = roundScores;
+      // Update round scores
+      roundScores[player.id] = (roundScores[player.id] || 0) + points;
+    });
 
-      // Check if we have an overall winner based on lowest points
-      if (newState.currentRound >= 3) {
-        const highestPoints = Math.max(
-          ...newState.players.map((p) => p.points),
+    newState.roundScores = roundScores;
+
+    // Check if we have an overall winner based on lowest points
+    if (newState.currentRound >= 3) {
+      const highestPoints = Math.max(...newState.players.map((p) => p.points));
+      if (highestPoints >= 100) {
+        const lowestPoints = Math.min(...newState.players.map((p) => p.points));
+        const winners = newState.players.filter(
+          (p) => p.points === lowestPoints,
         );
-        if (highestPoints >= 100) {
-          const lowestPoints = Math.min(
-            ...newState.players.map((p) => p.points),
-          );
-          const winners = newState.players.filter(
-            (p) => p.points === lowestPoints,
-          );
 
-          if (winners.length === 1) {
-            newState.gamePhase = "gameOver";
-            newState.winner = winners[0].name;
-            return newState;
-          }
+        if (winners.length === 1) {
+          newState.gamePhase = "gameOver";
+          newState.winner = winners[0].name;
+          return newState;
         }
       }
+    }
 
-      // Start new round
-      return startNewRound(newState);
-    });
+    // Start new round
+    return startNewRound(newState);
   };
 
   // Start a new round
@@ -963,6 +1641,7 @@ const LocalGame: React.FC = () => {
     newState.drawnFromDiscard = false;
     newState.drawnCard = null;
     newState.cleanWinPossible = true;
+    newState.cpuThinking = false;
 
     return newState;
   };
@@ -987,7 +1666,7 @@ const LocalGame: React.FC = () => {
       }}
     >
       <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold">Tunisian Rami - Local Game</h1>
+        <h1 className="text-2xl font-bold">Tunisian Rami - You vs. CPU</h1>
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -1047,6 +1726,11 @@ const LocalGame: React.FC = () => {
             <div className="text-center md:text-left mb-2 md:mb-0">
               <h2 className="text-xl font-semibold">
                 {currentPlayer.name}'s Turn
+                {currentPlayer.isComputer && gameState.cpuThinking && (
+                  <span className="ml-2 inline-block animate-pulse">
+                    Thinking...
+                  </span>
+                )}
               </h2>
               <p className="text-white/70">
                 Phase:{" "}
@@ -1070,7 +1754,10 @@ const LocalGame: React.FC = () => {
 
               {gameState.players.map((player) => (
                 <div key={player.id} className="text-center">
-                  <div className="text-sm text-white/70">{player.name}</div>
+                  <div className="text-sm text-white/70">
+                    {player.name}
+                    {player.isComputer && <span className="ml-1">🤖</span>}
+                  </div>
                   <div className="font-bold">{player.points} pts</div>
                   {!player.hasLaidInitial51 &&
                     player.id === currentPlayer.id && (
@@ -1102,21 +1789,29 @@ const LocalGame: React.FC = () => {
                 const ownerName =
                   gameState.players.find((p) => p.id === meld.playerId)?.name ||
                   "Unknown";
+                const isOwnerCPU =
+                  gameState.players.find((p) => p.id === meld.playerId)
+                    ?.isComputer || false;
 
                 return (
                   <div
                     key={meld.id}
                     className={`bg-black/20 p-3 rounded-lg border-2 ${
                       isSelected ? "border-blue-500" : "border-transparent"
-                    } cursor-pointer transition-all`}
-                    onClick={() => handleMeldClick(meld)}
+                    } ${!currentPlayer.isComputer ? "cursor-pointer" : ""} transition-all`}
+                    onClick={() =>
+                      !currentPlayer.isComputer && handleMeldClick(meld)
+                    }
                   >
                     <div className="flex justify-between items-center mb-2">
                       <div className="text-sm text-white/70">
                         {meld.type === "set" ? "Set" : "Run"} -{" "}
                         {calculatePoints(meld.cards)} points
                       </div>
-                      <div className="text-xs text-white/60">{ownerName}</div>
+                      <div className="text-xs text-white/60">
+                        {ownerName}
+                        {isOwnerCPU && <span className="ml-1">🤖</span>}
+                      </div>
                     </div>
                     <div className="flex gap-2 overflow-x-auto pb-2">
                       {meld.cards.map((card) => (
@@ -1151,8 +1846,8 @@ const LocalGame: React.FC = () => {
             <div className="flex justify-around gap-4">
               <div className="text-center">
                 <div
-                  className="playing-card card-back mx-auto cursor-pointer hover:opacity-80 transition-opacity"
-                  onClick={drawFromDeck}
+                  className={`playing-card card-back mx-auto ${!currentPlayer.isComputer ? "cursor-pointer hover:opacity-80 transition-opacity" : ""}`}
+                  onClick={() => !currentPlayer.isComputer && drawFromDeck()}
                   style={{ width: "80px", height: "112px" }}
                 >
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -1164,7 +1859,9 @@ const LocalGame: React.FC = () => {
                 <Button
                   className="mt-2"
                   onClick={drawFromDeck}
-                  disabled={gameState.gamePhase !== "draw"}
+                  disabled={
+                    gameState.gamePhase !== "draw" || currentPlayer.isComputer
+                  }
                 >
                   Draw
                 </Button>
@@ -1173,8 +1870,10 @@ const LocalGame: React.FC = () => {
               <div className="text-center">
                 {gameState.discardPile.length > 0 ? (
                   <div
-                    className="mx-auto cursor-pointer hover:opacity-80 transition-opacity"
-                    onClick={drawFromDiscardPile}
+                    className={`mx-auto ${!currentPlayer.isComputer ? "cursor-pointer hover:opacity-80 transition-opacity" : ""}`}
+                    onClick={() =>
+                      !currentPlayer.isComputer && drawFromDiscardPile()
+                    }
                     style={{ width: "80px", height: "112px" }}
                   >
                     <GameCard
@@ -1209,7 +1908,8 @@ const LocalGame: React.FC = () => {
                   onClick={drawFromDiscardPile}
                   disabled={
                     gameState.gamePhase !== "draw" ||
-                    gameState.discardPile.length === 0
+                    gameState.discardPile.length === 0 ||
+                    currentPlayer.isComputer
                   }
                 >
                   Take
@@ -1226,7 +1926,8 @@ const LocalGame: React.FC = () => {
                 disabled={
                   gameState.gamePhase !== "meld" ||
                   selectedCards.length < 3 ||
-                  selectedMeld !== null
+                  selectedMeld !== null ||
+                  currentPlayer.isComputer
                 }
               >
                 Create Meld
@@ -1236,7 +1937,8 @@ const LocalGame: React.FC = () => {
                 disabled={
                   gameState.gamePhase !== "meld" ||
                   selectedCards.length !== 1 ||
-                  selectedMeld !== null
+                  selectedMeld !== null ||
+                  currentPlayer.isComputer
                 }
               >
                 Discard
@@ -1270,98 +1972,132 @@ const LocalGame: React.FC = () => {
         </div>
       </div>
 
-      {/* Player's hand */}
-      <div className="mt-4 bg-black/30 backdrop-blur-md rounded-xl p-4">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold">
-            {currentPlayer.name}'s Hand ({calculatePoints(currentPlayer.hand)}{" "}
-            points)
-          </h3>
-          <Button
-            size="sm"
-            variant="outline"
-            className="bg-black/50 text-white border-white/30 hover:bg-black/70"
-            onClick={() => {
-              // Auto organize cards
-              setGameState((prev) => {
-                if (!prev) return prev;
-                const newState = { ...prev };
+      {/* Player's hand - only show human player's hand */}
+      {!currentPlayer.isComputer && (
+        <div className="mt-4 bg-black/30 backdrop-blur-md rounded-xl p-4">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold">
+              Your Hand ({calculatePoints(currentPlayer.hand)} points)
+            </h3>
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+              onClick={() => {
+                // Auto organize cards
+                setGameState((prev) => {
+                  if (!prev) return prev;
+                  const newState = { ...prev };
 
-                // Group by suit first, then by rank value
-                const sortedHand = [
-                  ...newState.players[newState.currentPlayerIndex].hand,
-                ].sort((a, b) => {
-                  // First by suit
-                  if (a.suit !== b.suit) {
-                    // Order: hearts, diamonds, clubs, spades
-                    const suitOrder = {
-                      hearts: 0,
-                      diamonds: 1,
-                      clubs: 2,
-                      spades: 3,
-                    };
-                    return suitOrder[a.suit] - suitOrder[b.suit];
-                  }
-                  // Then by value
-                  return a.value - b.value;
+                  // Group by suit first, then by rank value
+                  const sortedHand = [
+                    ...newState.players[newState.currentPlayerIndex].hand,
+                  ].sort((a, b) => {
+                    // First by suit
+                    if (a.suit !== b.suit) {
+                      // Order: hearts, diamonds, clubs, spades
+                      const suitOrder = {
+                        hearts: 0,
+                        diamonds: 1,
+                        clubs: 2,
+                        spades: 3,
+                      };
+                      return suitOrder[a.suit] - suitOrder[b.suit];
+                    }
+                    // Then by value
+                    return a.value - b.value;
+                  });
+
+                  newState.players[newState.currentPlayerIndex].hand =
+                    sortedHand;
+                  return newState;
                 });
 
-                newState.players[newState.currentPlayerIndex].hand = sortedHand;
-                return newState;
-              });
-
-              toast({
-                title: "Cards organized",
-                description: "Your hand has been sorted by suit and rank",
-              });
-            }}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="mr-1"
+                toast({
+                  title: "Cards organized",
+                  description: "Your hand has been sorted by suit and rank",
+                });
+              }}
             >
-              <line x1="21" x2="14" y1="4" y2="4"></line>
-              <line x1="10" x2="3" y1="4" y2="4"></line>
-              <line x1="21" x2="12" y1="12" y2="12"></line>
-              <line x1="8" x2="3" y1="12" y2="12"></line>
-              <line x1="21" x2="16" y1="20" y2="20"></line>
-              <line x1="12" x2="3" y1="20" y2="20"></line>
-              <line x1="14" x2="14" y1="2" y2="6"></line>
-              <line x1="8" x2="8" y1="10" y2="14"></line>
-              <line x1="16" x2="16" y1="18" y2="22"></line>
-            </svg>
-            Organize Cards
-          </Button>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mr-1"
+              >
+                <line x1="21" x2="14" y1="4" y2="4"></line>
+                <line x1="10" x2="3" y1="4" y2="4"></line>
+                <line x1="21" x2="12" y1="12" y2="12"></line>
+                <line x1="8" x2="3" y1="12" y2="12"></line>
+                <line x1="21" x2="16" y1="20" y2="20"></line>
+                <line x1="12" x2="3" y1="20" y2="20"></line>
+                <line x1="14" x2="14" y1="2" y2="6"></line>
+                <line x1="8" x2="8" y1="10" y2="14"></line>
+                <line x1="16" x2="16" y1="18" y2="22"></line>
+              </svg>
+              Organize Cards
+            </Button>
+          </div>
+          <div className="flex gap-1 justify-center flex-wrap">
+            {currentPlayer.hand.map((card) => (
+              <div
+                key={card.id}
+                className="mb-4"
+                style={{ margin: "-10px 2px" }}
+              >
+                <GameCard
+                  suit={card.suit}
+                  rank={card.rank}
+                  isJoker={card.isJoker}
+                  faceUp={true}
+                  selected={selectedCards.some((c) => c.id === card.id)}
+                  className={
+                    gameState.drawnCard?.id === card.id &&
+                    gameState.drawnFromDiscard
+                      ? "ring-2 ring-amber-500"
+                      : ""
+                  }
+                  onClick={() => handleCardClick(card)}
+                />
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-1 justify-center flex-wrap">
-          {currentPlayer.hand.map((card) => (
-            <div key={card.id} className="mb-4" style={{ margin: "-10px 2px" }}>
-              <GameCard
-                suit={card.suit}
-                rank={card.rank}
-                isJoker={card.isJoker}
-                faceUp={true}
-                selected={selectedCards.some((c) => c.id === card.id)}
-                className={
-                  gameState.drawnCard?.id === card.id &&
-                  gameState.drawnFromDiscard
-                    ? "ring-2 ring-amber-500"
-                    : ""
-                }
-                onClick={() => handleCardClick(card)}
-              />
-            </div>
-          ))}
+      )}
+
+      {/* CPU player hand - show facedown if it's their turn */}
+      {currentPlayer.isComputer && (
+        <div className="mt-4 bg-black/30 backdrop-blur-md rounded-xl p-4">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold">
+              {currentPlayer.name}'s Hand ({currentPlayer.hand.length} cards)
+              {gameState.cpuThinking && (
+                <span className="ml-2 animate-pulse">Thinking...</span>
+              )}
+            </h3>
+          </div>
+          <div className="flex gap-1 justify-center flex-wrap">
+            {currentPlayer.hand.map((_, index) => (
+              <div key={index} className="mb-4" style={{ margin: "-10px 2px" }}>
+                <div
+                  className="playing-card card-back"
+                  style={{ width: "70px", height: "98px" }}
+                >
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="text-2xl text-white/40">?</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Rules dialog */}
       <Dialog open={showRules} onOpenChange={setShowRules}>

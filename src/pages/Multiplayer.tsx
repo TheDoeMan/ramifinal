@@ -376,23 +376,27 @@ const Multiplayer = () => {
     }
 
     try {
+      // Cancel any active countdown
+      setCountdown(null);
+      setIsCountingDown(false);
+
+      // Immediately update local state to provide feedback
+      setGameSession((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          state: "playing",
+          lastUpdated: Date.now(),
+        };
+      });
+
+      // Then update the session in storage
       const success = await startGameSession(gameSession.id, playerId);
 
       if (success) {
         toast({
           title: "Game started",
           description: "The game has begun!",
-        });
-
-        // Local optimistic update
-        setGameSession((prev) => {
-          if (!prev) return prev;
-
-          return {
-            ...prev,
-            state: "playing",
-            lastUpdated: Date.now(),
-          };
         });
       }
     } catch (error) {
