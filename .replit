@@ -10,3 +10,15 @@ run = ["sh", "-c", "npm run preview -- --host 0.0.0.0 --port 5000"]
 [[ports]]
 localPort = 8080
 externalPort = 80
+
+[workflows]
+runButton = "Start Game"
+
+[[workflows.workflow]]
+name = "Start Game"
+author = 42985962
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"

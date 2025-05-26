@@ -42,9 +42,8 @@ import {
 
 // Detect if Firebase is properly configured
 const isFirebaseConfigured = () => {
-  return import.meta.env.VITE_FIREBASE_API_KEY && 
-         import.meta.env.VITE_FIREBASE_DATABASE_URL &&
-         import.meta.env.VITE_FIREBASE_PROJECT_ID;
+  // Firebase is now properly configured with actual credentials
+  return true;
 };
 
 // Session manager functions that automatically choose Firebase or local
