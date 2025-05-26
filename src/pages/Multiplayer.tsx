@@ -15,18 +15,47 @@ import {
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, Copy, CheckCircle } from "lucide-react";
+// Try Firebase first, fallback to local session manager
 import {
-  createGameSession,
-  joinGameSession,
-  getGameSession,
-  updatePlayerStatus,
-  leaveGameSession,
-  startGameSession,
-  startSessionMonitoring,
-  checkForExistingSession,
+  createGameSession as createFirebaseSession,
+  joinGameSession as joinFirebaseSession,
+  getGameSession as getFirebaseSession,
+  updatePlayerStatus as updateFirebasePlayerStatus,
+  leaveGameSession as leaveFirebaseSession,
+  startGameSession as startFirebaseSession,
+  startSessionMonitoring as startFirebaseMonitoring,
+  checkForExistingSession as checkFirebaseSession,
   type GameSession,
   type SessionPlayer,
 } from "@/utils/firebaseSessionManager";
+
+import {
+  createGameSession as createLocalSession,
+  joinGameSession as joinLocalSession,
+  getGameSession as getLocalSession,
+  updatePlayerStatus as updateLocalPlayerStatus,
+  leaveGameSession as leaveLocalSession,
+  startGameSession as startLocalSession,
+  startSessionMonitoring as startLocalMonitoring,
+  checkForExistingSession as checkLocalSession,
+} from "@/utils/sessionManager";
+
+// Detect if Firebase is properly configured
+const isFirebaseConfigured = () => {
+  return import.meta.env.VITE_FIREBASE_API_KEY && 
+         import.meta.env.VITE_FIREBASE_DATABASE_URL &&
+         import.meta.env.VITE_FIREBASE_PROJECT_ID;
+};
+
+// Session manager functions that automatically choose Firebase or local
+const createGameSession = isFirebaseConfigured() ? createFirebaseSession : createLocalSession;
+const joinGameSession = isFirebaseConfigured() ? joinFirebaseSession : joinLocalSession;
+const getGameSession = isFirebaseConfigured() ? getFirebaseSession : getLocalSession;
+const updatePlayerStatus = isFirebaseConfigured() ? updateFirebasePlayerStatus : updateLocalPlayerStatus;
+const leaveGameSession = isFirebaseConfigured() ? leaveFirebaseSession : leaveLocalSession;
+const startGameSession = isFirebaseConfigured() ? startFirebaseSession : startLocalSession;
+const startSessionMonitoring = isFirebaseConfigured() ? startFirebaseMonitoring : startLocalMonitoring;
+const checkForExistingSession = isFirebaseConfigured() ? checkFirebaseSession : checkLocalSession;
 
 // Types for multiplayer game
 type Card = {
@@ -77,6 +106,7 @@ const Multiplayer = () => {
   // Check for existing session on component mount
   useEffect(() => {
     console.log("Multiplayer component mounted");
+    console.log("Using session type:", isFirebaseConfigured() ? "Firebase (real-time)" : "Local (same device)");
 
     // Save player name to localStorage when it changes
     if (playerName) {
