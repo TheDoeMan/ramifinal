@@ -1,4 +1,3 @@
-
 // Firebase Configuration
 // To set up Firebase for your project:
 // 1. Go to https://console.firebase.google.com/
