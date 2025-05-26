@@ -5,7 +5,8 @@ run = "npm run dev"
 channel = "stable-24_05"
 
 [deployment]
-run = ["sh", "-c", "npm run preview -- --host 0.0.0.0 --port 5000"]
+run = ["sh", "-c", "npx serve -s build -l 5000"]
+build = ["sh", "-c", "npm run build"]
 
 [[ports]]
 localPort = 8080
@@ -22,4 +23,4 @@ mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npm run dev"
+args = "npm start"
