@@ -9,7 +9,8 @@ export default defineConfig({
     port: 8080,
     allowedHosts: "all",
     hmr: {
-      clientPort: 443,
+      port: 443,
+      host: "localhost"
     },
   },
   plugins: [react()],
