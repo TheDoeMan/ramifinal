@@ -3,11 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "start": "craco start",
-    "build": "craco build",
-    "test": "craco test",
-    "eject": "react-scripts eject",
-    "dev": "craco start",
+    "start": "vite",
+    "build": "vite build",
+    "test": "vitest",
+    "dev": "vite",
+    "preview": "vite preview",
     "format.fix": "prettier --write .",
     "typecheck": "tsc"
   },
