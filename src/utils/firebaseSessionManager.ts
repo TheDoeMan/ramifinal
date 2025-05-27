@@ -253,20 +253,29 @@ export const startGameSession = (
 ): Promise<boolean> => {
   return new Promise(async (resolve) => {
     try {
+      console.log(`🔥 Firebase startGameSession called for ${gameId} by ${hostId}`);
+      
       const sessionRef = ref(database, `sessions/${gameId}`);
       const snapshot = await get(sessionRef);
 
       if (!snapshot.exists()) {
-        console.error(`Cannot start game: Session ${gameId} not found`);
+        console.error(`❌ Cannot start game: Session ${gameId} not found`);
         resolve(false);
         return;
       }
 
       const session: GameSession = snapshot.val();
+      console.log(`📄 Current session state:`, {
+        id: session.id,
+        state: session.state,
+        hostId: session.hostId,
+        playerCount: session.players.length,
+        players: session.players.map(p => ({ name: p.name, ready: p.isReady }))
+      });
 
       if (session.hostId !== hostId) {
         console.error(
-          `Cannot start game: Player ${hostId} is not the host of session ${gameId}`,
+          `❌ Cannot start game: Player ${hostId} is not the host of session ${gameId}`,
         );
         resolve(false);
         return;
@@ -276,7 +285,8 @@ export const startGameSession = (
       const allReady = session.players.every((p) => p.isReady);
       if (!allReady) {
         console.error(
-          `Cannot start game: Not all players are ready in session ${gameId}`,
+          `❌ Cannot start game: Not all players are ready in session ${gameId}`,
+          session.players.map(p => `${p.name}: ${p.isReady}`)
         );
         resolve(false);
         return;
@@ -289,14 +299,16 @@ export const startGameSession = (
         lastUpdated: Date.now(),
       };
 
+      console.log(`🎯 Updating session state to playing...`);
+      
       // Update Firebase
       await set(sessionRef, updatedSession);
 
-      console.log(`Game ${gameId} started by host ${hostId}`);
+      console.log(`✅ Game ${gameId} started successfully by host ${hostId}`);
 
       resolve(true);
     } catch (error) {
-      console.error("Error starting game session:", error);
+      console.error("💥 Error starting game session:", error);
       resolve(false);
     }
   });
