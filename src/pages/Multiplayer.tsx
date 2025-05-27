@@ -1088,6 +1088,13 @@ const Multiplayer = () => {
             <div className="text-center mb-6">
               <h2 className="text-xl font-semibold">Game in Progress</h2>
               <div className="text-green-400 mt-2">Current Turn: Player 1</div>
+              <div className="mt-2 text-sm text-white/70 space-x-4">
+                <span>Draw Deck: {gameCards ? gameCards.drawDeck.length : 80} cards</span>
+                <span>•</span>
+                <span>Discard: {gameCards ? gameCards.discardPile.length : 0} cards</span>
+                <span>•</span>
+                <span>Your Cards: {gameCards && gameCards.playerHands[playerId] ? gameCards.playerHands[playerId].length : 14}</span>
+              </div>
             </div>
 
             {/* Center area with deck and discard pile */}
@@ -1131,23 +1138,50 @@ const Multiplayer = () => {
               {/* Discard Pile */}
               <div className="text-center">
                 <div className="text-white/70 text-sm mb-2">Discard Pile</div>
-                <div className="relative">
+                <div className="relative" style={{ minHeight: "120px" }}>
                   {gameCards && gameCards.discardPile.length > 0 ? (
-                    <GameCard 
-                      suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit} 
-                      rank={gameCards.discardPile[gameCards.discardPile.length - 1].rank} 
-                      faceUp={true} 
-                      isJoker={gameCards.discardPile[gameCards.discardPile.length - 1].isJoker}
-                      style={{ width: "80px", height: "112px" }}
-                      className="cursor-pointer hover:scale-105 transition-transform duration-200"
-                      onClick={() => {
-                        const topCard = gameCards.discardPile[gameCards.discardPile.length - 1];
-                        toast({
-                          title: "Card taken",
-                          description: `You took the ${topCard.rank} of ${topCard.suit} from discard pile`,
-                        });
-                      }}
-                    />
+                    <div className="relative">
+                      {/* Show stack effect for multiple cards */}
+                      {gameCards.discardPile.length > 1 && (
+                        <>
+                          <div className="absolute top-1 left-1 opacity-60">
+                            <GameCard 
+                              suit="hearts" 
+                              rank="A" 
+                              faceUp={true} 
+                              style={{ width: "80px", height: "112px" }}
+                            />
+                          </div>
+                          <div className="absolute top-0.5 left-0.5 opacity-80">
+                            <GameCard 
+                              suit="hearts" 
+                              rank="A" 
+                              faceUp={true} 
+                              style={{ width: "80px", height: "112px" }}
+                            />
+                          </div>
+                        </>
+                      )}
+                      <GameCard 
+                        suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit} 
+                        rank={gameCards.discardPile[gameCards.discardPile.length - 1].rank} 
+                        faceUp={true} 
+                        isJoker={gameCards.discardPile[gameCards.discardPile.length - 1].isJoker}
+                        style={{ width: "80px", height: "112px" }}
+                        className="cursor-pointer hover:scale-110 hover:-translate-y-2 transition-all duration-300 ease-in-out animate-pulse"
+                        onClick={() => {
+                          const topCard = gameCards.discardPile[gameCards.discardPile.length - 1];
+                          // Add visual feedback
+                          toast({
+                            title: "Card taken from discard",
+                            description: `You took the ${topCard.rank} of ${topCard.suit}`,
+                          });
+                        }}
+                      />
+                      <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
+                        {gameCards.discardPile.length} card{gameCards.discardPile.length !== 1 ? 's' : ''}
+                      </div>
+                    </div>
                   ) : (
                     <div className="w-20 h-28 border-2 border-dashed border-white/30 rounded-lg flex items-center justify-center">
                       <span className="text-white/50 text-xs">Empty</span>
@@ -1161,72 +1195,52 @@ const Multiplayer = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
               {gameSession.players
                 .filter((player) => player.id !== playerId)
-                .map((player, index) => (
-                  <div
-                    key={player.id}
-                    className="bg-black/20 rounded-lg p-4"
-                  >
-                    <div className="flex items-center gap-2 mb-3">
-                      <div
-                        className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
-                      ></div>
-                      <span className="font-medium">{player.name}</span>
-                      <div className="text-sm text-white/70">
-                        Cards: {gameCards && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 14}
+                .map((player, index) => {
+                  const playerCardCount = gameCards && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 14;
+                  return (
+                    <div
+                      key={player.id}
+                      className="bg-black/20 rounded-lg p-4"
+                    >
+                      <div className="flex items-center gap-2 mb-3">
+                        <div
+                          className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
+                        ></div>
+                        <span className="font-medium">{player.name}</span>
+                        <div className="text-sm text-white/70">
+                          Cards: {playerCardCount}
+                        </div>
+                      </div>
+                      
+                      {/* Other player's hand (face down) */}
+                      <div className="flex gap-1 justify-center overflow-visible" style={{ minHeight: "60px" }}>
+                        {Array.from({ length: playerCardCount }).map((_, cardIndex) => (
+                          <div
+                            key={`${player.id}-card-${cardIndex}`}
+                            className="flex-shrink-0 transition-all duration-500 ease-in-out"
+                            style={{ 
+                              marginLeft: cardIndex > 0 ? "-25px" : "0",
+                              zIndex: cardIndex,
+                              transform: `rotate(${(cardIndex - Math.floor(playerCardCount/2)) * 3}deg)`,
+                              transition: "all 0.5s cubic-bezier(0.4, 0, 0.2, 1)"
+                            }}
+                          >
+                            <GameCard
+                              suit="hearts"
+                              rank="A"
+                              faceUp={false}
+                              style={{ 
+                                width: "40px", 
+                                height: "56px"
+                              }}
+                              className="transition-all duration-500 ease-in-out hover:translate-y-2 hover:scale-110"
+                            />
+                          </div>
+                        ))}
                       </div>
                     </div>
-                    
-                    {/* Other player's hand (face down) */}
-                    <div className="flex gap-1 justify-center">
-                      {gameCards && gameCards.playerHands[player.id] ? 
-                        gameCards.playerHands[player.id].map((_, cardIndex) => (
-                          <div
-                            key={cardIndex}
-                            className="flex-shrink-0"
-                            style={{ 
-                              marginLeft: cardIndex > 0 ? "-25px" : "0",
-                              zIndex: cardIndex
-                            }}
-                          >
-                            <GameCard
-                              suit="hearts"
-                              rank="A"
-                              faceUp={false}
-                              style={{ 
-                                width: "40px", 
-                                height: "56px",
-                                transform: `rotate(${(cardIndex - 7) * 2}deg)`
-                              }}
-                              className="transition-transform duration-300 hover:translate-y-2"
-                            />
-                          </div>
-                        )) :
-                        Array.from({ length: 14 }).map((_, cardIndex) => (
-                          <div
-                            key={cardIndex}
-                            className="flex-shrink-0"
-                            style={{ 
-                              marginLeft: cardIndex > 0 ? "-25px" : "0",
-                              zIndex: cardIndex
-                            }}
-                          >
-                            <GameCard
-                              suit="hearts"
-                              rank="A"
-                              faceUp={false}
-                              style={{ 
-                                width: "40px", 
-                                height: "56px",
-                                transform: `rotate(${(cardIndex - 7) * 2}deg)`
-                              }}
-                              className="transition-transform duration-300 hover:translate-y-2"
-                            />
-                          </div>
-                        ))
-                      }
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           </div>
 
@@ -1295,8 +1309,11 @@ const Multiplayer = () => {
                     return (
                       <div
                         key={card.id}
-                        className="flex-shrink-0 transition-all duration-300 hover:-translate-y-8 hover:scale-110 cursor-pointer"
-                        style={{ zIndex: isSelected ? 100 : index }}
+                        className={`flex-shrink-0 transition-all duration-500 hover:-translate-y-8 hover:scale-110 cursor-pointer card-deal-animation ${isSelected ? 'transform -translate-y-4 scale-105' : ''}`}
+                        style={{ 
+                          zIndex: isSelected ? 100 : index,
+                          animationDelay: `${index * 50}ms`
+                        }}
                         onClick={() => {
                           const cardAlreadySelected = selectedCards.some(c => c.id === card.id);
                           if (cardAlreadySelected) {
@@ -1319,7 +1336,7 @@ const Multiplayer = () => {
                             width: "85px", 
                             height: "119px"
                           }}
-                          className={`shadow-lg ${isSelected ? 'ring-4 ring-yellow-400 ring-opacity-80 shadow-yellow-400/50' : ''}`}
+                          className={`shadow-lg transition-all duration-300 ${isSelected ? 'ring-4 ring-yellow-400 ring-opacity-100' : ''}`}
                         />
                       </div>
                     );
@@ -1329,6 +1346,7 @@ const Multiplayer = () => {
                     <div
                       key={index}
                       className="flex-shrink-0 w-[85px] h-[119px] bg-white/10 rounded-lg animate-pulse"
+                      style={{ animationDelay: `${index * 100}ms` }}
                     />
                   ))
                 }
