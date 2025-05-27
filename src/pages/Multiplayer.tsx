@@ -82,6 +82,64 @@ const CARD_VALUES: Record<Rank, number> = {
   K: 10,
 };
 
+// Create a complete 108-card deck (2 standard decks + 4 jokers)
+const createDeck = (): Card[] => {
+  const cards: Card[] = [];
+  const suits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
+  const ranks: Rank[] = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+  
+  // Add two complete decks (104 cards)
+  for (let deckNum = 0; deckNum < 2; deckNum++) {
+    suits.forEach(suit => {
+      ranks.forEach(rank => {
+        cards.push({
+          id: `${suit}_${rank}_${deckNum}`,
+          suit,
+          rank,
+          value: CARD_VALUES[rank],
+          isJoker: false
+        });
+      });
+    });
+  }
+  
+  // Add 4 jokers
+  for (let i = 0; i < 4; i++) {
+    cards.push({
+      id: `joker_${i}`,
+      suit: "spades", // Default suit for jokers
+      rank: "A", // Default rank for jokers
+      value: 0, // Jokers adapt their value
+      isJoker: true
+    });
+  }
+  
+  // Shuffle the deck
+  for (let i = cards.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cards[i], cards[j]] = [cards[j], cards[i]];
+  }
+  
+  return cards;
+};
+
+// Deal cards for game start
+const dealCards = (deck: Card[], playerCount: number) => {
+  const players: Card[][] = Array(playerCount).fill(null).map(() => []);
+  const cardsPerPlayer = 14;
+  
+  // Deal 14 cards to each player
+  for (let i = 0; i < cardsPerPlayer; i++) {
+    for (let p = 0; p < playerCount; p++) {
+      if (deck.length > 0) {
+        players[p].push(deck.pop()!);
+      }
+    }
+  }
+  
+  return players;
+};
+
 const Multiplayer = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -101,6 +159,12 @@ const Multiplayer = () => {
   const [lastUpdateTime, setLastUpdateTime] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isCountingDown, setIsCountingDown] = useState(false);
+  const [gameCards, setGameCards] = useState<{
+    playerHands: Record<string, Card[]>;
+    drawDeck: Card[];
+    discardPile: Card[];
+  } | null>(null);
+  const [selectedCards, setSelectedCards] = useState<Card[]>([]);
 
   // Check for existing session on component mount
   useEffect(() => {
@@ -600,6 +664,23 @@ const Multiplayer = () => {
       if (success) {
         console.log("✅ Backend success - updating local state");
         
+        // Initialize game cards
+        const deck = createDeck();
+        const playerCount = gameSession.players.length;
+        const playerHands = dealCards(deck, playerCount);
+        const handsMap: Record<string, Card[]> = {};
+        
+        gameSession.players.forEach((player, index) => {
+          handsMap[player.id] = playerHands[index] || [];
+        });
+        
+        // Set up game cards state
+        setGameCards({
+          playerHands: handsMap,
+          drawDeck: deck, // Remaining cards after dealing
+          discardPile: [] // Start with empty discard pile
+        });
+        
         // Update local state
         setGameSession((prev) => {
           if (!prev) return prev;
@@ -1017,23 +1098,33 @@ const Multiplayer = () => {
                 <div 
                   className="relative cursor-pointer hover:scale-105 transition-transform duration-200"
                   onClick={() => {
-                    toast({
-                      title: "Card drawn",
-                      description: "You drew a card from the deck",
-                    });
+                    if (gameCards && gameCards.drawDeck.length > 0) {
+                      toast({
+                        title: "Card drawn",
+                        description: "You drew a card from the deck",
+                      });
+                    }
                   }}
                 >
-                  {/* Stack effect with multiple cards */}
-                  <div className="absolute top-1 left-1">
-                    <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
-                  </div>
-                  <div className="absolute top-0.5 left-0.5">
-                    <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
-                  </div>
-                  <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
-                  <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
-                    54 cards
-                  </div>
+                  {gameCards && gameCards.drawDeck.length > 0 ? (
+                    <>
+                      {/* Stack effect with multiple cards */}
+                      <div className="absolute top-1 left-1">
+                        <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                      </div>
+                      <div className="absolute top-0.5 left-0.5">
+                        <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                      </div>
+                      <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                      <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
+                        {gameCards.drawDeck.length} cards
+                      </div>
+                    </>
+                  ) : (
+                    <div className="w-20 h-28 border-2 border-dashed border-white/30 rounded-lg flex items-center justify-center">
+                      <span className="text-white/50 text-xs">Empty</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1041,19 +1132,27 @@ const Multiplayer = () => {
               <div className="text-center">
                 <div className="text-white/70 text-sm mb-2">Discard Pile</div>
                 <div className="relative">
-                  <GameCard 
-                    suit="spades" 
-                    rank="7" 
-                    faceUp={true} 
-                    style={{ width: "80px", height: "112px" }}
-                    className="cursor-pointer hover:scale-105 transition-transform duration-200"
-                    onClick={() => {
-                      toast({
-                        title: "Card taken",
-                        description: "You took the 7 of Spades from discard pile",
-                      });
-                    }}
-                  />
+                  {gameCards && gameCards.discardPile.length > 0 ? (
+                    <GameCard 
+                      suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit} 
+                      rank={gameCards.discardPile[gameCards.discardPile.length - 1].rank} 
+                      faceUp={true} 
+                      isJoker={gameCards.discardPile[gameCards.discardPile.length - 1].isJoker}
+                      style={{ width: "80px", height: "112px" }}
+                      className="cursor-pointer hover:scale-105 transition-transform duration-200"
+                      onClick={() => {
+                        const topCard = gameCards.discardPile[gameCards.discardPile.length - 1];
+                        toast({
+                          title: "Card taken",
+                          description: `You took the ${topCard.rank} of ${topCard.suit} from discard pile`,
+                        });
+                      }}
+                    />
+                  ) : (
+                    <div className="w-20 h-28 border-2 border-dashed border-white/30 rounded-lg flex items-center justify-center">
+                      <span className="text-white/50 text-xs">Empty</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1072,33 +1171,59 @@ const Multiplayer = () => {
                         className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
                       ></div>
                       <span className="font-medium">{player.name}</span>
-                      <div className="text-sm text-white/70">Cards: 14</div>
+                      <div className="text-sm text-white/70">
+                        Cards: {gameCards && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 14}
+                      </div>
                     </div>
                     
                     {/* Other player's hand (face down) */}
-                    <div className="flex gap-1 justify-center overflow-x-auto">
-                      {Array.from({ length: 14 }).map((_, cardIndex) => (
-                        <div
-                          key={cardIndex}
-                          className="flex-shrink-0"
-                          style={{ 
-                            marginLeft: cardIndex > 0 ? "-25px" : "0",
-                            zIndex: cardIndex
-                          }}
-                        >
-                          <GameCard
-                            suit="hearts"
-                            rank="A"
-                            faceUp={false}
+                    <div className="flex gap-1 justify-center">
+                      {gameCards && gameCards.playerHands[player.id] ? 
+                        gameCards.playerHands[player.id].map((_, cardIndex) => (
+                          <div
+                            key={cardIndex}
+                            className="flex-shrink-0"
                             style={{ 
-                              width: "40px", 
-                              height: "56px",
-                              transform: `rotate(${(cardIndex - 7) * 2}deg)`
+                              marginLeft: cardIndex > 0 ? "-25px" : "0",
+                              zIndex: cardIndex
                             }}
-                            className="transition-transform duration-300 hover:translate-y-2"
-                          />
-                        </div>
-                      ))}
+                          >
+                            <GameCard
+                              suit="hearts"
+                              rank="A"
+                              faceUp={false}
+                              style={{ 
+                                width: "40px", 
+                                height: "56px",
+                                transform: `rotate(${(cardIndex - 7) * 2}deg)`
+                              }}
+                              className="transition-transform duration-300 hover:translate-y-2"
+                            />
+                          </div>
+                        )) :
+                        Array.from({ length: 14 }).map((_, cardIndex) => (
+                          <div
+                            key={cardIndex}
+                            className="flex-shrink-0"
+                            style={{ 
+                              marginLeft: cardIndex > 0 ? "-25px" : "0",
+                              zIndex: cardIndex
+                            }}
+                          >
+                            <GameCard
+                              suit="hearts"
+                              rank="A"
+                              faceUp={false}
+                              style={{ 
+                                width: "40px", 
+                                height: "56px",
+                                transform: `rotate(${(cardIndex - 7) * 2}deg)`
+                              }}
+                              className="transition-transform duration-300 hover:translate-y-2"
+                            />
+                          </div>
+                        ))
+                      }
                     </div>
                   </div>
                 ))}
@@ -1161,48 +1286,52 @@ const Multiplayer = () => {
             </div>
             
             {/* Player's cards container with proper overflow handling */}
-            <div className="relative">
-              <div className="flex gap-2 justify-center overflow-x-auto pb-4" style={{ minHeight: "140px" }}>
+            <div className="relative" style={{ minHeight: "160px", overflow: "visible" }}>
+              <div className="flex gap-2 justify-center" style={{ paddingBottom: "40px", overflow: "visible" }}>
                 {/* Player's actual hand */}
-                {[
-                  { suit: "hearts", rank: "A", isJoker: false },
-                  { suit: "hearts", rank: "2", isJoker: false },
-                  { suit: "hearts", rank: "3", isJoker: false },
-                  { suit: "diamonds", rank: "4", isJoker: false },
-                  { suit: "diamonds", rank: "5", isJoker: false },
-                  { suit: "clubs", rank: "6", isJoker: false },
-                  { suit: "clubs", rank: "7", isJoker: false },
-                  { suit: "spades", rank: "8", isJoker: true },
-                  { suit: "spades", rank: "9", isJoker: false },
-                  { suit: "spades", rank: "10", isJoker: false },
-                  { suit: "hearts", rank: "J", isJoker: false },
-                  { suit: "diamonds", rank: "Q", isJoker: false },
-                  { suit: "clubs", rank: "K", isJoker: false },
-                  { suit: "spades", rank: "A", isJoker: false },
-                ].map((card, index) => (
-                  <div
-                    key={index}
-                    className="flex-shrink-0 transition-all duration-300 hover:-translate-y-4 hover:scale-110 cursor-pointer"
-                    onClick={() => {
-                      toast({
-                        title: "Card selected",
-                        description: `Selected ${card.rank} of ${card.suit}`,
-                      });
-                    }}
-                  >
-                    <GameCard
-                      suit={card.suit as Suit}
-                      rank={card.rank as Rank}
-                      faceUp={true}
-                      isJoker={card.isJoker}
-                      style={{ 
-                        width: "85px", 
-                        height: "119px"
-                      }}
-                      className="shadow-lg"
+                {gameCards && gameCards.playerHands[playerId] ? 
+                  gameCards.playerHands[playerId].map((card, index) => {
+                    const isSelected = selectedCards.some(c => c.id === card.id);
+                    return (
+                      <div
+                        key={card.id}
+                        className="flex-shrink-0 transition-all duration-300 hover:-translate-y-8 hover:scale-110 cursor-pointer"
+                        style={{ zIndex: isSelected ? 100 : index }}
+                        onClick={() => {
+                          const cardAlreadySelected = selectedCards.some(c => c.id === card.id);
+                          if (cardAlreadySelected) {
+                            setSelectedCards(prev => prev.filter(c => c.id !== card.id));
+                          } else {
+                            setSelectedCards(prev => [...prev, card]);
+                          }
+                          toast({
+                            title: isSelected ? "Card deselected" : "Card selected",
+                            description: `${isSelected ? "Deselected" : "Selected"} ${card.rank} of ${card.suit}`,
+                          });
+                        }}
+                      >
+                        <GameCard
+                          suit={card.suit}
+                          rank={card.rank}
+                          faceUp={true}
+                          isJoker={card.isJoker}
+                          style={{ 
+                            width: "85px", 
+                            height: "119px"
+                          }}
+                          className={`shadow-lg ${isSelected ? 'ring-4 ring-yellow-400 ring-opacity-80 shadow-yellow-400/50' : ''}`}
+                        />
+                      </div>
+                    );
+                  }) :
+                  // Fallback display while cards are loading
+                  Array.from({ length: 14 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="flex-shrink-0 w-[85px] h-[119px] bg-white/10 rounded-lg animate-pulse"
                     />
-                  </div>
-                ))}
+                  ))
+                }
               </div>
             </div>
           </div>
