@@ -183,8 +183,9 @@ const Multiplayer = () => {
       setGameSession(sessionCopy);
       setLastUpdateTime(sessionCopy.lastUpdated);
 
-      // Handle player join notifications
+      // Handle player join notifications (only for non-first updates)
       if (
+        !isFirstUpdate &&
         currentSession &&
         sessionCopy.players.length > currentSession.players.length
       ) {
@@ -203,8 +204,8 @@ const Multiplayer = () => {
         });
       }
 
-      // Check if a player became ready
-      if (currentSession) {
+      // Check if a player became ready (only for non-first updates and avoid duplicate notifications)
+      if (!isFirstUpdate && currentSession) {
         sessionCopy.players.forEach((player) => {
           const previousPlayerState = currentSession.players.find(
             (p) => p.id === player.id,
@@ -212,7 +213,8 @@ const Multiplayer = () => {
           if (
             previousPlayerState &&
             !previousPlayerState.isReady &&
-            player.isReady
+            player.isReady &&
+            player.id !== playerId // Don't show notification for yourself
           ) {
             console.log("Player became ready:", player.name);
             toast({
@@ -240,12 +242,14 @@ const Multiplayer = () => {
       }
 
       // Auto-start game when all players are ready (for host only)
+      // Only trigger this on the initial check or when a new player becomes ready
       if (
         sessionCopy.state === "waiting" &&
         sessionCopy.hostId === playerId &&
         sessionCopy.players.length >= 2 &&
         sessionCopy.players.every((p) => p.isReady) &&
-        !isCountingDown
+        !isCountingDown &&
+        countdown === null
       ) {
         console.log("All players ready, starting countdown");
         // Start countdown to auto-start the game
@@ -314,12 +318,15 @@ const Multiplayer = () => {
 
     if (countdown <= 0) {
       // Start the game when countdown reaches zero
-      handleStartGame();
+      console.log("Countdown reached zero, starting game");
       setIsCountingDown(false);
+      setCountdown(null);
+      handleStartGame();
       return;
     }
 
     const timer = setTimeout(() => {
+      console.log("Countdown:", countdown - 1);
       setCountdown(countdown - 1);
     }, 1000);
 
@@ -537,7 +544,10 @@ const Multiplayer = () => {
 
   // Start the game (host only)
   const handleStartGame = async () => {
-    if (!gameSession || playerId !== gameSession.hostId) return;
+    if (!gameSession || playerId !== gameSession.hostId) {
+      console.log("Not host or no game session");
+      return;
+    }
 
     // Check if there are enough players
     if (gameSession.players.length < 2) {
@@ -561,21 +571,11 @@ const Multiplayer = () => {
     }
 
     try {
+      console.log("Starting game process...");
+      
       // Cancel any active countdown
       setCountdown(null);
       setIsCountingDown(false);
-
-      // Immediately update local state to provide feedback
-      setGameSession((prev) => {
-        if (!prev) return prev;
-        const updated = {
-          ...prev,
-          state: "playing",
-          lastUpdated: Date.now(),
-        };
-        console.log("Starting game - local state update:", updated);
-        return updated;
-      });
 
       // Force immediate UI update with a toast
       toast({
@@ -585,47 +585,62 @@ const Multiplayer = () => {
 
       // Update the session in storage with retry mechanism
       let success = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        console.log(`Attempt ${attempt + 1} to start game`);
         success = await startGameSession(gameSession.id, playerId);
-        if (success) break;
-        // Short delay between retries
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        if (success) {
+          console.log("Successfully started game session");
+          break;
+        }
+        // Longer delay between retries
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
 
       console.log("Start game result:", success);
 
       if (success) {
+        // Wait a bit for the session to update
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        
         // Get the updated session to verify the state change
         const updatedSession = await getGameSession(gameSession.id);
         console.log("Session after start:", updatedSession);
 
-        if (updatedSession) {
-          if (updatedSession.state === "playing") {
-            toast({
-              title: "Game started",
-              description: "The game has begun!",
-            });
-          } else {
-            // If state wasn't updated correctly, force another update
-            console.log("Game state not updated correctly, forcing update");
-            await startGameSession(gameSession.id, playerId);
-
-            // Force update the local state
-            setGameSession((prev) => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                state: "playing",
-                lastUpdated: Date.now(),
-              };
-            });
-          }
+        if (updatedSession && updatedSession.state === "playing") {
+          // Immediately update local state to match
+          setGameSession(updatedSession);
+          
+          toast({
+            title: "Game started",
+            description: "The game has begun!",
+          });
+        } else {
+          console.log("Game state not updated correctly, retrying...");
+          // Force update the local state as fallback
+          setGameSession((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              state: "playing" as const,
+              lastUpdated: Date.now(),
+            };
+          });
+          
+          toast({
+            title: "Game started",
+            description: "The game has begun!",
+          });
         }
       } else {
         throw new Error("Failed to start the game after multiple attempts");
       }
     } catch (error) {
       console.error("Error starting game:", error);
+      
+      // Reset countdown states
+      setCountdown(null);
+      setIsCountingDown(false);
+      
       toast({
         title: "Error",
         description: "Failed to start the game. Please try again.",
