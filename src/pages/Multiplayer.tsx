@@ -1017,10 +1017,17 @@ const Multiplayer = () => {
       setSelectedCards(prev => [...prev, card]);
     }
     
-    toast({
-      title: cardAlreadySelected ? "Card deselected" : "Card selected",
+    // Show brief notification that auto-dismisses after 2 seconds
+    const { dismiss } = toast({
+      title: `${selectedCards.length + (cardAlreadySelected ? -1 : 1)} cards selected`,
       description: `${cardAlreadySelected ? "Deselected" : "Selected"} ${card.rank} of ${card.suit}`,
+      duration: 2000,
     });
+    
+    // Auto-dismiss after 2 seconds
+    setTimeout(() => {
+      dismiss();
+    }, 2000);
   };
 
   // Form meld with selected cards
