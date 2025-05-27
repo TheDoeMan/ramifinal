@@ -249,6 +249,7 @@ const Multiplayer = () => {
       players: updatedSession.players.length,
       lastUpdated: new Date(updatedSession.lastUpdated).toLocaleTimeString(),
       hasGameState: !!updatedSession.gameState,
+      currentPlayerId: playerId
     });
 
     // Add debug logs
@@ -262,6 +263,15 @@ const Multiplayer = () => {
 
     // Force a deep copy to ensure reactivity
     const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
+    
+    // CRITICAL FIX: Ensure playerId is set if it's missing but we're in the session
+    if (!playerId && sessionCopy.players.length > 0) {
+      const { gameId: existingGameId, playerId: existingPlayerId } = checkForExistingSession();
+      if (existingPlayerId && sessionCopy.players.some(p => p.id === existingPlayerId)) {
+        console.log("🔧 Fixing missing playerId:", existingPlayerId);
+        setPlayerId(existingPlayerId);
+      }
+    }
 
     // Update game state if available - CRITICAL FIX
     if (sessionCopy.gameState) {
@@ -373,10 +383,13 @@ const Multiplayer = () => {
       setGameSession(sessionCopy);
       setLastUpdateTime(sessionCopy.lastUpdated);
 
+      // Get current playerId - prioritize state, fallback to localStorage
+      const currentPlayerId = playerId || localStorage.getItem("player_id");
+      
       // Auto-start countdown logic - only for host and only if there's an actual change
       const shouldStartCountdown = (
         sessionCopy.state === "waiting" &&
-        sessionCopy.hostId === playerId &&
+        sessionCopy.hostId === currentPlayerId &&
         sessionCopy.players.length >= 2 &&
         sessionCopy.players.every((p) => p.isReady) &&
         countdown === null && // Only start if no countdown is active
@@ -385,9 +398,10 @@ const Multiplayer = () => {
 
       console.log("Countdown check:", {
         state: sessionCopy.state,
-        isHost: sessionCopy.hostId === playerId,
+        isHost: sessionCopy.hostId === currentPlayerId,
         hostId: sessionCopy.hostId,
         playerId: playerId,
+        currentPlayerId: currentPlayerId,
         playerCount: sessionCopy.players.length,
         allReady: sessionCopy.players.every((p) => p.isReady),
         countdownActive: countdown !== null,
@@ -480,8 +494,13 @@ const Multiplayer = () => {
 
       setGameId(newGameId);
       setPlayerId(newPlayerId);
-
+      
       console.log("Setting playerId to:", newPlayerId);
+      
+      // Ensure playerId is immediately available for countdown logic
+      setTimeout(() => {
+        console.log("Verifying playerId was set:", newPlayerId);
+      }, 100);
 
       // Get initial session state
       const session = await getGameSession(newGameId);
@@ -556,8 +575,13 @@ const Multiplayer = () => {
 
       console.log("Join successful, player ID:", newPlayerId);
       setPlayerId(newPlayerId!);
-
+      
       console.log("Setting playerId to:", newPlayerId);
+      
+      // Ensure playerId is immediately available
+      setTimeout(() => {
+        console.log("Verifying playerId was set after join:", newPlayerId);
+      }, 100);
 
       // Get session details - retry a few times if needed
       let session = null;
@@ -1645,8 +1669,19 @@ const Multiplayer = () => {
         </div>
       )}
 
+      {/* Game state: playing but cards not loaded yet */}
+      {gameSession?.state === "playing" && !gameCards && (
+        <div className="flex-grow bg-black/30 backdrop-blur-md rounded-xl p-6">
+          <div className="text-center">
+            <h2 className="text-2xl font-semibold mb-4">Loading Game...</h2>
+            <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-white mx-auto mb-4"></div>
+            <p className="text-white/70">Setting up the game board and dealing cards...</p>
+          </div>
+        </div>
+      )}
+
       {/* Game state: playing */}
-      {gameSession?.state === "playing" && (
+      {gameSession?.state === "playing" && gameCards && (
         <div className="flex-grow space-y-4">
           {/* Game Board */}
           <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
