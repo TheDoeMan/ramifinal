@@ -247,8 +247,7 @@ const Multiplayer = () => {
         sessionCopy.hostId === playerId &&
         sessionCopy.players.length >= 2 &&
         sessionCopy.players.every((p) => p.isReady) &&
-        !isCountingDown &&
-        countdown === null &&
+        countdown === null && // Only start if no countdown is active
         (isFirstUpdate || hasPlayerChanges || hasReadyChanges) // Only start countdown on actual changes
       ) {
         console.log("All players ready, starting countdown");
@@ -286,7 +285,7 @@ const Multiplayer = () => {
 
   // Countdown effect for automatic game start
   useEffect(() => {
-    if (countdown === null || !isCountingDown) return;
+    if (countdown === null) return;
 
     if (countdown <= 0) {
       // Start the game when countdown reaches zero
@@ -303,22 +302,7 @@ const Multiplayer = () => {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [countdown, isCountingDown]);
-
-  // Prevent countdown reset when session updates but conditions haven't changed
-  useEffect(() => {
-    if (
-      gameSession?.state === "waiting" &&
-      gameSession.hostId === playerId &&
-      gameSession.players.length >= 2 &&
-      gameSession.players.every((p) => p.isReady) &&
-      isCountingDown &&
-      countdown !== null
-    ) {
-      // Don't restart countdown if already counting down
-      console.log("Countdown already in progress, not restarting");
-    }
-  }, [gameSession?.players, gameSession?.state]);
+  }, [countdown]); // Remove isCountingDown dependency to prevent restarts
 
   // Create a new game
   const handleCreateGame = async () => {
@@ -560,73 +544,49 @@ const Multiplayer = () => {
     try {
       console.log("Starting game process...");
       
-      // Cancel any active countdown
+      // Cancel any active countdown immediately
       setCountdown(null);
       setIsCountingDown(false);
 
-      // Force immediate UI update with a toast
-      toast({
-        title: "Starting game",
-        description: "The game is now starting...",
+      // Optimistically update local state first for immediate UI feedback
+      setGameSession((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          state: "playing" as const,
+          lastUpdated: Date.now(),
+        };
       });
 
-      // Update the session in storage with retry mechanism
-      let success = false;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        console.log(`Attempt ${attempt + 1} to start game`);
-        success = await startGameSession(gameSession.id, playerId);
-        if (success) {
-          console.log("Successfully started game session");
-          break;
+      // Show immediate feedback
+      toast({
+        title: "Game started!",
+        description: "The game has begun!",
+      });
+
+      // Update the session in storage (async, don't wait for it)
+      startGameSession(gameSession.id, playerId).then(success => {
+        console.log("Backend game start result:", success);
+        if (!success) {
+          console.error("Failed to update backend, but UI is already updated");
         }
-        // Longer delay between retries
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
+      });
 
-      console.log("Start game result:", success);
-
-      if (success) {
-        // Wait a bit for the session to update
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        
-        // Get the updated session to verify the state change
-        const updatedSession = await getGameSession(gameSession.id);
-        console.log("Session after start:", updatedSession);
-
-        if (updatedSession && updatedSession.state === "playing") {
-          // Immediately update local state to match
-          setGameSession(updatedSession);
-          
-          toast({
-            title: "Game started",
-            description: "The game has begun!",
-          });
-        } else {
-          console.log("Game state not updated correctly, retrying...");
-          // Force update the local state as fallback
-          setGameSession((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              state: "playing" as const,
-              lastUpdated: Date.now(),
-            };
-          });
-          
-          toast({
-            title: "Game started",
-            description: "The game has begun!",
-          });
-        }
-      } else {
-        throw new Error("Failed to start the game after multiple attempts");
-      }
     } catch (error) {
       console.error("Error starting game:", error);
       
-      // Reset countdown states
+      // Reset states on error
       setCountdown(null);
       setIsCountingDown(false);
+      
+      // Revert optimistic update
+      setGameSession((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          state: "waiting" as const,
+        };
+      });
       
       toast({
         title: "Error",
