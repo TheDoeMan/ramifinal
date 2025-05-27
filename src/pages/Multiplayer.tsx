@@ -1001,117 +1001,233 @@ const Multiplayer = () => {
 
       {/* Game state: playing */}
       {gameSession?.state === "playing" && (
-        <div className="flex-grow bg-black/30 backdrop-blur-md rounded-xl p-6">
-          <div className="text-center mb-6">
-            <h2 className="text-xl font-semibold">Game in Progress</h2>
-
-            <div className="animate-pulse text-amber-300 mt-2">
-              Game has started! This would normally show the game board.
+        <div className="flex-grow space-y-4">
+          {/* Game Board */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
+            <div className="text-center mb-6">
+              <h2 className="text-xl font-semibold">Game in Progress</h2>
+              <div className="text-green-400 mt-2">Current Turn: Player 1</div>
             </div>
-          </div>
 
-          <div className="bg-black/20 rounded-lg p-4 mb-6">
-            <h3 className="text-lg font-medium mb-3">Players</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {gameSession.players.map((player) => (
-                <div
-                  key={player.id}
-                  className={`bg-black/30 p-3 rounded-md border ${player.id === playerId ? "border-blue-500" : "border-white/10"}`}
+            {/* Center area with deck and discard pile */}
+            <div className="flex justify-center items-center gap-8 mb-8">
+              {/* Draw Deck */}
+              <div className="text-center">
+                <div className="text-white/70 text-sm mb-2">Draw Deck</div>
+                <div 
+                  className="relative cursor-pointer hover:scale-105 transition-transform duration-200"
+                  onClick={() => {
+                    toast({
+                      title: "Card drawn",
+                      description: "You drew a card from the deck",
+                    });
+                  }}
                 >
-                  <div className="flex items-center gap-2 mb-1">
-                    <div
-                      className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
-                    ></div>
-                    <span className="font-medium">{player.name}</span>
-                    {player.id === playerId && (
-                      <Badge className="bg-blue-600 text-xs">You</Badge>
-                    )}
+                  {/* Stack effect with multiple cards */}
+                  <div className="absolute top-1 left-1">
+                    <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
                   </div>
-                  <div className="text-sm text-white/70">Status: Ready</div>
-                  <div className="text-sm text-white/70">Points: 0</div>
+                  <div className="absolute top-0.5 left-0.5">
+                    <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                  </div>
+                  <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                  <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
+                    54 cards
+                  </div>
                 </div>
-              ))}
+              </div>
+
+              {/* Discard Pile */}
+              <div className="text-center">
+                <div className="text-white/70 text-sm mb-2">Discard Pile</div>
+                <div className="relative">
+                  <GameCard 
+                    suit="spades" 
+                    rank="7" 
+                    faceUp={true} 
+                    style={{ width: "80px", height: "112px" }}
+                    className="cursor-pointer hover:scale-105 transition-transform duration-200"
+                    onClick={() => {
+                      toast({
+                        title: "Card taken",
+                        description: "You took the 7 of Spades from discard pile",
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Other Players */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+              {gameSession.players
+                .filter((player) => player.id !== playerId)
+                .map((player, index) => (
+                  <div
+                    key={player.id}
+                    className="bg-black/20 rounded-lg p-4"
+                  >
+                    <div className="flex items-center gap-2 mb-3">
+                      <div
+                        className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
+                      ></div>
+                      <span className="font-medium">{player.name}</span>
+                      <div className="text-sm text-white/70">Cards: 14</div>
+                    </div>
+                    
+                    {/* Other player's hand (face down) */}
+                    <div className="flex gap-1 justify-center overflow-x-auto">
+                      {Array.from({ length: 14 }).map((_, cardIndex) => (
+                        <div
+                          key={cardIndex}
+                          className="flex-shrink-0"
+                          style={{ 
+                            marginLeft: cardIndex > 0 ? "-25px" : "0",
+                            zIndex: cardIndex
+                          }}
+                        >
+                          <GameCard
+                            suit="hearts"
+                            rank="A"
+                            faceUp={false}
+                            style={{ 
+                              width: "40px", 
+                              height: "56px",
+                              transform: `rotate(${(cardIndex - 7) * 2}deg)`
+                            }}
+                            className="transition-transform duration-300 hover:translate-y-2"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
             </div>
           </div>
 
-          <div className="bg-black/20 rounded-lg p-4 mt-8">
-            <div className="flex justify-between items-center mb-3">
+          {/* Player's Hand */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
+            <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium">Your Hand</h3>
-              <Button
-                size="sm"
-                variant="outline"
-                className="bg-black/50 text-white border-white/30 hover:bg-black/70"
-                onClick={() => {
-                  toast({
-                    title: "Cards organized",
-                    description: "Your hand has been sorted by suit and rank",
-                  });
-                }}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="mr-1"
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+                  onClick={() => {
+                    toast({
+                      title: "Cards organized",
+                      description: "Your hand has been sorted by suit and rank",
+                    });
+                  }}
                 >
-                  <line x1="21" x2="14" y1="4" y2="4"></line>
-                  <line x1="10" x2="3" y1="4" y2="4"></line>
-                  <line x1="21" x2="12" y1="12" y2="12"></line>
-                  <line x1="8" x2="3" y1="12" y2="12"></line>
-                  <line x1="21" x2="16" y1="20" y2="20"></line>
-                  <line x1="12" x2="3" y1="20" y2="20"></line>
-                  <line x1="14" x2="14" y1="2" y2="6"></line>
-                  <line x1="8" x2="8" y1="10" y2="14"></line>
-                  <line x1="16" x2="16" y1="18" y2="22"></line>
-                </svg>
-                Organize Cards
-              </Button>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mr-1"
+                  >
+                    <line x1="21" x2="14" y1="4" y2="4"></line>
+                    <line x1="10" x2="3" y1="4" y2="4"></line>
+                    <line x1="21" x2="12" y1="12" y2="12"></line>
+                    <line x1="8" x2="3" y1="12" y2="12"></line>
+                    <line x1="21" x2="16" y1="20" y2="20"></line>
+                    <line x1="12" x2="3" y1="20" y2="20"></line>
+                    <line x1="14" x2="14" y1="2" y2="6"></line>
+                    <line x1="8" x2="8" y1="10" y2="14"></line>
+                    <line x1="16" x2="16" y1="18" y2="22"></line>
+                  </svg>
+                  Organize
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => {
+                    toast({
+                      title: "Turn ended",
+                      description: "You discarded a card and ended your turn",
+                    });
+                  }}
+                >
+                  End Turn
+                </Button>
+              </div>
             </div>
-            <div className="flex justify-center">
-              <div className="flex gap-1 flex-wrap justify-center">
-                {/* Demo cards for visualization */}
-                {Array.from({ length: 14 }).map((_, index) => (
+            
+            {/* Player's cards container with proper overflow handling */}
+            <div className="relative">
+              <div className="flex gap-2 justify-center overflow-x-auto pb-4" style={{ minHeight: "140px" }}>
+                {/* Player's actual hand */}
+                {[
+                  { suit: "hearts", rank: "A", isJoker: false },
+                  { suit: "hearts", rank: "2", isJoker: false },
+                  { suit: "hearts", rank: "3", isJoker: false },
+                  { suit: "diamonds", rank: "4", isJoker: false },
+                  { suit: "diamonds", rank: "5", isJoker: false },
+                  { suit: "clubs", rank: "6", isJoker: false },
+                  { suit: "clubs", rank: "7", isJoker: false },
+                  { suit: "spades", rank: "8", isJoker: true },
+                  { suit: "spades", rank: "9", isJoker: false },
+                  { suit: "spades", rank: "10", isJoker: false },
+                  { suit: "hearts", rank: "J", isJoker: false },
+                  { suit: "diamonds", rank: "Q", isJoker: false },
+                  { suit: "clubs", rank: "K", isJoker: false },
+                  { suit: "spades", rank: "A", isJoker: false },
+                ].map((card, index) => (
                   <div
                     key={index}
-                    className="flex-shrink-0"
-                    style={{ margin: "-10px 2px" }}
+                    className="flex-shrink-0 transition-all duration-300 hover:-translate-y-4 hover:scale-110 cursor-pointer"
+                    onClick={() => {
+                      toast({
+                        title: "Card selected",
+                        description: `Selected ${card.rank} of ${card.suit}`,
+                      });
+                    }}
                   >
                     <GameCard
-                      suit={
-                        ["hearts", "diamonds", "clubs", "spades"][
-                          index % 4
-                        ] as Suit
-                      }
-                      rank={
-                        [
-                          "A",
-                          "2",
-                          "3",
-                          "4",
-                          "5",
-                          "6",
-                          "7",
-                          "8",
-                          "9",
-                          "10",
-                          "J",
-                          "Q",
-                          "K",
-                        ][index % 13] as Rank
-                      }
+                      suit={card.suit as Suit}
+                      rank={card.rank as Rank}
                       faceUp={true}
-                      isJoker={index === 7}
-                      style={{ width: "70px", height: "98px" }}
+                      isJoker={card.isJoker}
+                      style={{ 
+                        width: "85px", 
+                        height: "119px"
+                      }}
+                      className="shadow-lg"
                     />
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+
+          {/* Game Actions */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+            <div className="flex flex-wrap gap-2 justify-center">
+              <Button
+                variant="outline"
+                className="bg-blue-600/20 text-white border-blue-500 hover:bg-blue-600/40"
+              >
+                Form Meld
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-purple-600/20 text-white border-purple-500 hover:bg-purple-600/40"
+              >
+                Add to Meld
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-red-600/20 text-white border-red-500 hover:bg-red-600/40"
+              >
+                Discard
+              </Button>
             </div>
           </div>
         </div>

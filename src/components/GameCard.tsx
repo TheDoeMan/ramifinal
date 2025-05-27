@@ -52,38 +52,45 @@ export const GameCard: React.FC<CardProps> = ({
   return (
     <div
       className={cn(
-        "playing-card select-none",
+        "playing-card select-none relative",
         faceUp
           ? isJoker
-            ? "bg-gradient-to-br from-purple-500 to-purple-700 text-white"
+            ? "bg-white text-black border-2 border-gold"
             : getColor(suit)
           : "card-back",
         selected && "ring-2 ring-blue-500 ring-offset-2",
-        onClick && "cursor-pointer",
+        onClick && "cursor-pointer hover:shadow-xl transition-all duration-200",
         className,
       )}
       style={{
         transform: selected ? "translateY(-20px)" : undefined,
+        width: style?.width || "85px",
+        height: style?.height || "119px",
         ...style,
       }}
       onClick={onClick}
     >
       {faceUp ? (
-        <div className="absolute inset-0 p-2 flex flex-col justify-between">
+        <div className="absolute inset-0 p-1 flex flex-col justify-between overflow-hidden">
           {isJoker ? (
-            // Joker card design
+            // Joker card design with external image
             <>
               <div className="flex justify-between items-start">
                 <div className="text-left">
-                  <div className="text-lg font-bold">J</div>
+                  <div className="text-sm font-bold">J</div>
                 </div>
               </div>
               <div className="flex-grow flex items-center justify-center">
-                <div className="text-3xl font-bold">JOKER</div>
+                <img 
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Joker_black_02.svg/1407px-Joker_black_02.svg.png"
+                  alt="Joker"
+                  className="w-12 h-12 object-contain"
+                  style={{ maxWidth: "80%", maxHeight: "80%" }}
+                />
               </div>
               <div className="flex justify-between items-end">
                 <div className="text-right ml-auto">
-                  <div className="text-lg font-bold">J</div>
+                  <div className="text-sm font-bold">J</div>
                 </div>
               </div>
             </>
@@ -92,26 +99,26 @@ export const GameCard: React.FC<CardProps> = ({
             <>
               <div className="flex justify-between items-start">
                 <div className="text-left">
-                  <div className="text-lg font-bold">{rank}</div>
-                  <div className="text-xl">{suitSymbols[suit]}</div>
+                  <div className="text-sm font-bold leading-none">{rank}</div>
+                  <div className="text-sm leading-none">{suitSymbols[suit]}</div>
                 </div>
               </div>
               <div className="flex-grow flex items-center justify-center">
-                <div className="text-4xl">{suitSymbols[suit]}</div>
+                <div className="text-2xl">{suitSymbols[suit]}</div>
               </div>
               <div className="flex justify-between items-end">
-                <div className="text-right ml-auto">
-                  <div className="text-lg font-bold">{rank}</div>
-                  <div className="text-xl">{suitSymbols[suit]}</div>
+                <div className="text-right ml-auto transform rotate-180">
+                  <div className="text-sm font-bold leading-none">{rank}</div>
+                  <div className="text-sm leading-none">{suitSymbols[suit]}</div>
                 </div>
               </div>
             </>
           )}
         </div>
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-            <div className="text-2xl text-white">TR</div>
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-blue-900 to-purple-900 border border-white/20">
+          <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center backdrop-blur-sm">
+            <div className="text-sm text-white font-bold">TR</div>
           </div>
         </div>
       )}
