@@ -25,14 +25,9 @@ import {
   startGameSession as startFirebaseSession,
   startSessionMonitoring as startFirebaseMonitoring,
   checkForExistingSession as checkFirebaseSession,
-  updateGameState as updateFirebaseGameState,
   type GameSession,
   type SessionPlayer,
-  type GameState as SharedGameState,
 } from "@/utils/firebaseSessionManager";
-
-// Storage keys
-const PLAYER_ID_KEY = "player_id";
 
 import {
   createGameSession as createLocalSession,
@@ -60,7 +55,6 @@ const leaveGameSession = isFirebaseConfigured() ? leaveFirebaseSession : leaveLo
 const startGameSession = isFirebaseConfigured() ? startFirebaseSession : startLocalSession;
 const startSessionMonitoring = isFirebaseConfigured() ? startFirebaseMonitoring : startLocalMonitoring;
 const checkForExistingSession = isFirebaseConfigured() ? checkFirebaseSession : checkLocalSession;
-const updateGameState = isFirebaseConfigured() ? updateFirebaseGameState : (() => Promise.resolve(false));
 
 // Types for multiplayer game
 type Card = {
@@ -88,76 +82,6 @@ const CARD_VALUES: Record<Rank, number> = {
   K: 10,
 };
 
-// Create a complete 108-card deck (2 standard decks + 4 jokers)
-const createDeck = (): Card[] => {
-  const cards: Card[] = [];
-  const suits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
-  const ranks: Rank[] = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
-
-  // Add two complete decks (104 cards)
-  for (let deckNum = 0; deckNum < 2; deckNum++) {
-    suits.forEach(suit => {
-      ranks.forEach(rank => {
-        cards.push({
-          id: `${suit}_${rank}_${deckNum}`,
-          suit,
-          rank,
-          value: CARD_VALUES[rank],
-          isJoker: false
-        });
-      });
-    });
-  }
-
-  // Add 4 jokers
-  for (let i = 0; i < 4; i++) {
-    cards.push({
-      id: `joker_${i}`,
-      suit: "spades", // Default suit for jokers
-      rank: "A", // Default rank for jokers
-      value: 0, // Jokers adapt their value
-      isJoker: true
-    });
-  }
-
-  // Shuffle the deck
-  for (let i = cards.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [cards[i], cards[j]] = [cards[j], cards[i]];
-  }
-
-  return cards;
-};
-
-// Deal cards for game start
-const dealCards = (deck: Card[], playerCount: number) => {
-  const players: Card[][] = Array(playerCount).fill(null).map(() => []);
-  const cardsPerPlayer = 14;
-
-  // Deal 14 cards to each player
-  for (let i = 0; i < cardsPerPlayer; i++) {
-    for (let p = 0; p < playerCount; p++) {
-      if (deck.length > 0) {
-        players[p].push(deck.pop()!);
-      }
-    }
-  }
-
-  return players;
-};
-
-// Game phase types for turn enforcement
-type GamePhase = 'draw' | 'meld' | 'discard';
-
-// Turn state to track what actions are allowed
-type TurnState = {
-  currentPhase: GamePhase;
-  hasDrawn: boolean;
-  drawnFromDiscard: boolean;
-  drawnCard: Card | null;
-  canEndTurn: boolean;
-};
-
 const Multiplayer = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -177,233 +101,6 @@ const Multiplayer = () => {
   const [lastUpdateTime, setLastUpdateTime] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isCountingDown, setIsCountingDown] = useState(false);
-  const [gameCards, setGameCards] = useState<{
-    playerHands: Record<string, Card[]>;
-    drawDeck: Card[];
-    discardPile: Card[];
-  } | null>(null);
-  const [selectedCards, setSelectedCards] = useState<Card[]>([]);
-  const [currentTurn, setCurrentTurn] = useState<string>(''); // Player ID whose turn it is
-  const [turnState, setTurnState] = useState<TurnState>({
-    currentPhase: 'draw',
-    hasDrawn: false,
-    drawnFromDiscard: false,
-    drawnCard: null,
-    canEndTurn: false
-  });
-
-  // Handle card selection/deselection in hand
-  const handleCardClick = (card: Card) => {
-    const cardAlreadySelected = selectedCards.some(c => c.id === card.id);
-    
-    if (cardAlreadySelected) {
-      setSelectedCards(prev => prev.filter(c => c.id !== card.id));
-    } else {
-      setSelectedCards(prev => [...prev, card]);
-    }
-    
-    // Show brief notification that auto-dismisses after 2 seconds
-    const { dismiss } = toast({
-      title: `${selectedCards.length + (cardAlreadySelected ? -1 : 1)} cards selected`,
-      description: `${cardAlreadySelected ? "Deselected" : "Selected"} ${card.rank} of ${card.suit}`,
-      duration: 2000,
-    });
-    
-    // Auto-dismiss after 2 seconds
-    setTimeout(() => {
-      dismiss();
-    }, 2000);
-  };
-
-  // Handle drawing from deck
-  const handleDrawFromDeck = async () => {
-    if (!gameSession || !gameCards || currentTurn !== playerId || turnState.hasDrawn) {
-      return;
-    }
-
-    try {
-      if (gameCards.drawDeck.length === 0) {
-        toast({
-          title: "Empty deck",
-          description: "The draw deck is empty",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      const drawnCard = gameCards.drawDeck[gameCards.drawDeck.length - 1];
-      
-      // Update local state optimistically
-      setGameCards(prev => {
-        if (!prev) return prev;
-        const newDrawDeck = [...prev.drawDeck];
-        const card = newDrawDeck.pop();
-        if (card && prev.playerHands[playerId]) {
-          return {
-            ...prev,
-            drawDeck: newDrawDeck,
-            playerHands: {
-              ...prev.playerHands,
-              [playerId]: [...prev.playerHands[playerId], card]
-            }
-          };
-        }
-        return prev;
-      });
-
-      // Update turn state
-      setTurnState(prev => ({
-        ...prev,
-        hasDrawn: true,
-        drawnFromDiscard: false,
-        drawnCard: drawnCard,
-        currentPhase: 'meld',
-        canEndTurn: true
-      }));
-
-      // Update backend
-      const updatedGameState = {
-        ...gameSession.gameState!,
-        playerHands: {
-          ...gameSession.gameState!.playerHands,
-          [playerId]: [...gameSession.gameState!.playerHands[playerId], drawnCard]
-        },
-        drawDeck: gameSession.gameState!.drawDeck.slice(0, -1),
-        turnState: {
-          currentPhase: 'meld' as const,
-          hasDrawn: true,
-          drawnFromDiscard: false,
-          drawnCard: drawnCard,
-          canEndTurn: true
-        }
-      };
-
-      await updateGameState(gameSession.id, updatedGameState);
-
-      toast({
-        title: "Card drawn",
-        description: `Drew ${drawnCard.rank} of ${drawnCard.suit}`,
-      });
-
-    } catch (error) {
-      console.error("Error drawing from deck:", error);
-      toast({
-        title: "Error",
-        description: "Failed to draw card",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Handle drawing from discard pile
-  const handleDrawFromDiscard = async () => {
-    if (!gameSession || !gameCards || currentTurn !== playerId || turnState.hasDrawn || gameCards.discardPile.length === 0) {
-      return;
-    }
-
-    try {
-      const drawnCard = gameCards.discardPile[gameCards.discardPile.length - 1];
-      
-      // Update local state optimistically
-      setGameCards(prev => {
-        if (!prev) return prev;
-        const newDiscardPile = [...prev.discardPile];
-        const card = newDiscardPile.pop();
-        if (card && prev.playerHands[playerId]) {
-          return {
-            ...prev,
-            discardPile: newDiscardPile,
-            playerHands: {
-              ...prev.playerHands,
-              [playerId]: [...prev.playerHands[playerId], card]
-            }
-          };
-        }
-        return prev;
-      });
-
-      // Update turn state
-      setTurnState(prev => ({
-        ...prev,
-        hasDrawn: true,
-        drawnFromDiscard: true,
-        drawnCard: drawnCard,
-        currentPhase: 'meld',
-        canEndTurn: false // Must use the card in a meld
-      }));
-
-      // Update backend
-      const updatedGameState = {
-        ...gameSession.gameState!,
-        playerHands: {
-          ...gameSession.gameState!.playerHands,
-          [playerId]: [...gameSession.gameState!.playerHands[playerId], drawnCard]
-        },
-        discardPile: gameSession.gameState!.discardPile.slice(0, -1),
-        turnState: {
-          currentPhase: 'meld' as const,
-          hasDrawn: true,
-          drawnFromDiscard: true,
-          drawnCard: drawnCard,
-          canEndTurn: false
-        }
-      };
-
-      await updateGameState(gameSession.id, updatedGameState);
-
-      toast({
-        title: "Card taken",
-        description: `Took ${drawnCard.rank} of ${drawnCard.suit} from discard pile`,
-      });
-
-    } catch (error) {
-      console.error("Error drawing from discard:", error);
-      toast({
-        title: "Error",
-        description: "Failed to take card from discard pile",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Organize cards function
-  const organizeCards = () => {
-    if (!gameCards || !playerId) return;
-
-    setGameCards(prev => {
-      if (!prev || !prev.playerHands[playerId]) return prev;
-
-      // Sort cards by suit first, then by rank value
-      const sortedHand = [...prev.playerHands[playerId]].sort((a, b) => {
-        // First by suit
-        if (a.suit !== b.suit) {
-          // Order: hearts, diamonds, clubs, spades
-          const suitOrder = {
-            hearts: 0,
-            diamonds: 1,
-            clubs: 2,
-            spades: 3,
-          };
-          return suitOrder[a.suit] - suitOrder[b.suit];
-        }
-        // Then by value
-        return a.value - b.value;
-      });
-
-      return {
-        ...prev,
-        playerHands: {
-          ...prev.playerHands,
-          [playerId]: sortedHand
-        }
-      };
-    });
-
-    toast({
-      title: "Cards organized",
-      description: "Your hand has been sorted by suit and rank",
-    });
-  };
 
   // Check for existing session on component mount
   useEffect(() => {
@@ -464,8 +161,6 @@ const Multiplayer = () => {
       id: updatedSession.id,
       players: updatedSession.players.length,
       lastUpdated: new Date(updatedSession.lastUpdated).toLocaleTimeString(),
-      hasGameState: !!updatedSession.gameState,
-      currentPlayerId: playerId
     });
 
     // Add debug logs
@@ -479,45 +174,6 @@ const Multiplayer = () => {
 
     // Force a deep copy to ensure reactivity
     const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
-
-    // CRITICAL FIX: Ensure playerId is set if it's missing but we're in the session
-    let currentPlayerId = playerId || localStorage.getItem(PLAYER_ID_KEY);
-    
-    if (!currentPlayerId && sessionCopy.players.length > 0) {
-      const { gameId: existingGameId, playerId: existingPlayerId } = checkForExistingSession();
-      if (existingPlayerId && sessionCopy.players.some(p => p.id === existingPlayerId)) {
-        console.log("🔧 Fixing missing playerId:", existingPlayerId);
-        setPlayerId(existingPlayerId);
-        currentPlayerId = existingPlayerId;
-      }
-    } else if (!playerId && currentPlayerId && sessionCopy.players.some(p => p.id === currentPlayerId)) {
-      console.log("🔧 Restoring playerId from localStorage:", currentPlayerId);
-      setPlayerId(currentPlayerId);
-    }
-
-    // Update game state if available AND we have a valid playerId
-    if (sessionCopy.gameState && currentPlayerId) {
-      console.log("Updating game state from session:", {
-        playerHandsKeys: Object.keys(sessionCopy.gameState.playerHands),
-        currentTurn: sessionCopy.gameState.currentTurn,
-        currentPlayerId: currentPlayerId,
-        playerHandExists: !!sessionCopy.gameState.playerHands[currentPlayerId],
-        playerHandSize: sessionCopy.gameState.playerHands[currentPlayerId]?.length || 0
-      });
-
-      // Only update if this player has a hand in the game state
-      if (sessionCopy.gameState.playerHands[currentPlayerId]) {
-        setGameCards({
-          playerHands: sessionCopy.gameState.playerHands,
-          drawDeck: sessionCopy.gameState.drawDeck,
-          discardPile: sessionCopy.gameState.discardPile,
-        });
-        setCurrentTurn(sessionCopy.gameState.currentTurn);
-        setTurnState(sessionCopy.gameState.turnState);
-      } else {
-        console.warn("⚠️ Player hand not found in game state for player:", currentPlayerId);
-      }
-    }
 
     // Store previous session state
     const currentSession = gameSession;
@@ -543,7 +199,7 @@ const Multiplayer = () => {
           const newPlayers = sessionCopy.players.filter(
             (p) => !currentSession.players.some((cp) => cp.id === p.id),
           );
-
+          
           if (newPlayers.length > 0) {
             hasPlayerChanges = true;
             newPlayers.forEach((player) => {
@@ -594,13 +250,10 @@ const Multiplayer = () => {
       setGameSession(sessionCopy);
       setLastUpdateTime(sessionCopy.lastUpdated);
 
-      // Get current playerId - use the state value or check localStorage
-      const currentPlayerId = playerId || localStorage.getItem("player_id");
-
       // Auto-start countdown logic - only for host and only if there's an actual change
       const shouldStartCountdown = (
         sessionCopy.state === "waiting" &&
-        sessionCopy.hostId === currentPlayerId &&
+        sessionCopy.hostId === playerId &&
         sessionCopy.players.length >= 2 &&
         sessionCopy.players.every((p) => p.isReady) &&
         countdown === null && // Only start if no countdown is active
@@ -609,10 +262,9 @@ const Multiplayer = () => {
 
       console.log("Countdown check:", {
         state: sessionCopy.state,
-        isHost: sessionCopy.hostId === currentPlayerId,
+        isHost: sessionCopy.hostId === playerId,
         hostId: sessionCopy.hostId,
         playerId: playerId,
-        currentPlayerId: currentPlayerId,
         playerCount: sessionCopy.players.length,
         allReady: sessionCopy.players.every((p) => p.isReady),
         countdownActive: countdown !== null,
@@ -634,10 +286,10 @@ const Multiplayer = () => {
   useEffect(() => {
     if (gameId && !showSetup && gameSession) {
       console.log("Setting up session polling for", gameSession.state);
-
+      
       // Use different polling intervals based on state
       const pollInterval = gameSession.state === "waiting" ? 1000 : 2000;
-
+      
       const interval = setInterval(() => {
         getGameSession(gameId).then((updatedSession) => {
           if (updatedSession && updatedSession.lastUpdated > lastUpdateTime) {
@@ -665,7 +317,7 @@ const Multiplayer = () => {
       console.log("🚀 Countdown reached zero - starting game");
       setIsCountingDown(false);
       setCountdown(null);
-
+      
       // Call handleStartGame immediately - no delay needed
       handleStartGame();
       return;
@@ -935,92 +587,28 @@ const Multiplayer = () => {
 
     try {
       console.log("✅ All checks passed - starting game process");
-
+      
       // Cancel any active countdown immediately
       setCountdown(null);
       setIsCountingDown(false);
 
-      // Initialize game cards FIRST before updating session
-      const deck = createDeck();
-      console.log("🃏 Created deck with", deck.length, "cards");
-
-      const playerCount = gameSession.players.length;
-      const playerHands = dealCards(deck, playerCount);
-      const handsMap: Record<string, Card[]> = {};
-
-      // Ensure all players get cards, especially the current player
-      gameSession.players.forEach((player, index) => {
-        handsMap[player.id] = playerHands[index] || [];
-        console.log(`Player ${player.name} (${player.id}) dealt ${handsMap[player.id].length} cards`);
-      });
-
-      // Double-check that current player has cards
-      if (!handsMap[playerId] || handsMap[playerId].length === 0) {
-        console.error("❌ Current player has no cards dealt!", { playerId, handsMap });
-        throw new Error("Failed to deal cards to current player");
-      }
-
-      console.log("🃏 Remaining deck has", deck.length, "cards");
-      console.log("🃏 All player hands:", Object.entries(handsMap).map(([id, cards]) => `${id}: ${cards.length} cards`));
-
-      // Initialize turn state - first player starts
-      const firstPlayer = gameSession.players[0];
-      const initialTurnState = {
-        currentPhase: 'draw' as const,
-        hasDrawn: false,
-        drawnFromDiscard: false,
-        drawnCard: null,
-        canEndTurn: false
-      };
-
-      // Create initial game state
-      const initialGameState: SharedGameState = {
-        playerHands: handsMap,
-        drawDeck: deck,
-        discardPile: [],
-        currentTurn: firstPlayer.id,
-        turnState: initialTurnState
-      };
-
-      console.log("🎯 First player:", firstPlayer.name, "ID:", firstPlayer.id);
-
-      // Update the session in storage FIRST
+      // Update the session in storage
       console.log("📡 Calling startGameSession...");
       const success = await startGameSession(gameSession.id, playerId);
       console.log("📡 Backend game start result:", success);
 
       if (success) {
-        console.log("✅ Backend success - now saving game state");
-
-        // Update the session with game state AFTER session state is updated
-        console.log("💾 Saving initial game state to session");
-        const gameStateSuccess = await updateGameState(gameSession.id, initialGameState);
+        console.log("✅ Backend success - updating local state");
         
-        if (!gameStateSuccess) {
-          console.error("❌ Failed to save game state");
-          throw new Error("Failed to save game state");
-        }
-
-        // Set up game cards state IMMEDIATELY after successful save
-        setGameCards({
-          playerHands: handsMap,
-          drawDeck: deck,
-          discardPile: []
-        });
-
-        setCurrentTurn(firstPlayer.id);
-        setTurnState(initialTurnState);
-
-        // Update local session state
+        // Update local state
         setGameSession((prev) => {
           if (!prev) return prev;
           const updated = {
             ...prev,
             state: "playing" as const,
-            gameState: initialGameState,
             lastUpdated: Date.now(),
           };
-          console.log("🎯 Local state updated to playing with game state");
+          console.log("🎯 Local state updated to playing");
           return updated;
         });
 
@@ -1029,9 +617,6 @@ const Multiplayer = () => {
           title: "Game started!",
           description: "The game has begun!",
         });
-
-        console.log("✅ Game initialization complete - all states set");
-
       } else {
         console.error("❌ Backend failed to start game");
         throw new Error("Failed to start game on backend");
@@ -1039,11 +624,11 @@ const Multiplayer = () => {
 
     } catch (error) {
       console.error("💥 Error starting game:", error);
-
+      
       // Reset states on error
       setCountdown(null);
       setIsCountingDown(false);
-
+      
       toast({
         title: "Error",
         description: "Failed to start the game. Please try again.",
@@ -1071,6 +656,7 @@ const Multiplayer = () => {
         toast({
           title: "Copy failed",
           description: "Couldn't copy the game code to clipboard",
+          variant: "destructive",
         });
       });
   };
@@ -1413,271 +999,236 @@ const Multiplayer = () => {
         </div>
       )}
 
-      {/* Game state: playing but cards not loaded yet */}
-      {gameSession?.state === "playing" && (!gameCards || !playerId || !gameSession.gameState) && (
-        <div className="flex-grow bg-black/30 backdrop-blur-md rounded-xl p-6">
-          <div className="text-center">
-            <h2 className="text-2xl font-semibold mb-4">Loading Game...</h2>
-            <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-white mx-auto mb-4"></div>
-            <p className="text-white/70">
-              {!playerId ? "Identifying player..." : !gameSession.gameState ? "Waiting for game state..." : "Setting up the game board and dealing cards..."}
-            </p>
-            <div className="mt-4 text-sm text-white/50">
-              Debug: Game ID: {gameSession.id} | Players: {gameSession.players.length} | PlayerId: {playerId || "NOT SET"} | GameState: {gameSession.gameState ? "YES" : "NO"}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Game state: playing */}
-      {gameSession?.state === "playing" && gameCards && playerId && gameSession.gameState && gameCards.playerHands && gameCards.playerHands[playerId] && gameCards.playerHands[playerId].length > 0 && (
-        <div className="flex-grow">
-          {/* Game status header */}
-          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 mb-4">
-            <div className="flex flex-col md:flex-row justify-between items-center">
-              <div className="text-white">
-                <h2 className="text-xl font-semibold">Game in Progress</h2>
-                <p className="text-white/70">
-                  Current turn: <span className="text-yellow-400 font-medium">
-                    {gameSession.players.find(p => p.id === currentTurn)?.name || "Unknown"}
-                  </span>
-                  {currentTurn === playerId && (
-                    <span className="ml-2 text-green-400">(Your turn)</span>
-                  )}
-                </p>
-              </div>
-              <div className="text-right text-white/70">
-                <div>Your cards: {gameCards.playerHands[playerId]?.length || 0}</div>
-                <div>Phase: {turnState.currentPhase}</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-            {/* Left column - Other players */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-white">Other Players</h3>
-              {gameSession.players.filter(p => p.id !== playerId).map(player => (
-                <div key={player.id} className="bg-black/30 backdrop-blur-md rounded-xl p-4">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="font-semibold text-white">{player.name}</h4>
-                    {currentTurn === player.id && (
-                      <Badge className="bg-yellow-600">Current Turn</Badge>
-                    )}
-                  </div>
-                  <div className="text-sm text-white/70 mb-3">
-                    Cards: {gameCards.playerHands && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 0}
-                  </div>
-                  {/* Show face-down cards for other players */}
-                  <div className="flex flex-wrap gap-1">
-                    {Array.from({ length: Math.min(gameCards.playerHands[player.id]?.length || 0, 5) }).map((_, index) => (
-                      <GameCard
-                        key={index}
-                        suit="spades"
-                        rank="A"
-                        faceUp={false}
-                        style={{ width: "40px", height: "56px" }}
-                      />
-                    ))}
-                    {(gameCards.playerHands[player.id]?.length || 0) > 5 && (
-                      <div className="text-white/50 text-xs mt-2">
-                        +{(gameCards.playerHands[player.id]?.length || 0) - 5} more
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+      {gameSession?.state === "playing" && (
+        <div className="flex-grow space-y-4">
+          {/* Game Board */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
+            <div className="text-center mb-6">
+              <h2 className="text-xl font-semibold">Game in Progress</h2>
+              <div className="text-green-400 mt-2">Current Turn: Player 1</div>
             </div>
 
-            {/* Right column - Game area and actions */}
-            <div className="space-y-4">
-              {/* Draw and discard piles */}
-              <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
-                <h3 className="text-lg font-semibold text-white mb-4 text-center">Game Area</h3>
-                
-                <div className="grid grid-cols-2 gap-6">
-                  {/* Draw pile */}
-                  <div className="text-center">
-                    <h4 className="text-white mb-3">Draw Pile</h4>
-                    <div className="relative">
-                      <div 
-                        className={`mx-auto cursor-pointer transition-all duration-200 ${
-                          currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn
-                            ? 'hover:shadow-2xl hover:shadow-blue-500/50 ring-2 ring-blue-400/50' 
-                            : ''
-                        }`}
-                        style={{ width: "80px", height: "112px" }}
-                        onClick={handleDrawFromDeck}
-                      >
-                        <GameCard
-                          suit="spades"
-                          rank="A"
-                          faceUp={false}
-                          style={{ width: "80px", height: "112px" }}
-                        />
-                      </div>
-                      <div className="text-white/60 text-sm mt-2">
-                        {gameCards.drawDeck?.length || 0} cards
-                      </div>
-                      {currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn && (
-                        <Button
-                          className="mt-2 w-full"
-                          size="sm"
-                          onClick={handleDrawFromDeck}
-                        >
-                          Draw
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Discard pile */}
-                  <div className="text-center">
-                    <h4 className="text-white mb-3">Discard Pile</h4>
-                    <div className="relative">
-                      {gameCards.discardPile && gameCards.discardPile.length > 0 ? (
-                        <div 
-                          className={`mx-auto cursor-pointer transition-all duration-200 ${
-                            currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn
-                              ? 'hover:shadow-2xl hover:shadow-green-500/50 ring-2 ring-green-400/50' 
-                              : ''
-                          }`}
-                          style={{ width: "80px", height: "112px" }}
-                          onClick={handleDrawFromDiscard}
-                        >
-                          <GameCard
-                            suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit}
-                            rank={gameCards.discardPile[gameCards.discardPile.length - 1].rank}
-                            isJoker={gameCards.discardPile[gameCards.discardPile.length - 1].isJoker}
-                            faceUp={true}
-                            style={{ width: "80px", height: "112px" }}
-                          />
-                        </div>
-                      ) : (
-                        <div
-                          className="playing-card bg-black/20 mx-auto border-2 border-dashed border-white/30"
-                          style={{ width: "80px", height: "112px" }}
-                        >
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <span className="text-white/50 text-xs">Empty</span>
-                          </div>
-                        </div>
-                      )}
-                      <div className="text-white/60 text-sm mt-2">
-                        {gameCards.discardPile?.length || 0} cards
-                      </div>
-                      {currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn && gameCards.discardPile && gameCards.discardPile.length > 0 && (
-                        <Button
-                          className="mt-2 w-full"
-                          size="sm"
-                          onClick={handleDrawFromDiscard}
-                        >
-                          Take
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Action buttons */}
-              {currentTurn === playerId && (
-                <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
-                  <h4 className="text-white font-semibold mb-3">Actions</h4>
-                  <div className="space-y-2">
-                    <Button
-                      className="w-full"
-                      disabled={selectedCards.length < 3 || turnState.currentPhase !== 'meld'}
-                      onClick={() => {
-                        console.log("Forming meld with:", selectedCards);
-                        // Handle meld formation
-                      }}
-                    >
-                      Form Meld ({selectedCards.length} cards selected)
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="w-full text-white border-white/30"
-                      disabled={selectedCards.length !== 1 || !turnState.canEndTurn}
-                      onClick={() => {
-                        console.log("Discarding card:", selectedCards[0]);
-                        // Handle discard
-                      }}
-                    >
-                      Discard Selected Card
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Your hand at the bottom */}
-          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-white">Your Hand ({gameCards.playerHands[playerId]?.length || 0} cards)</h3>
-              <Button
-                size="sm"
-                variant="outline"
-                className="bg-black/50 text-white border-white/30 hover:bg-black/70"
-                onClick={organizeCards}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="mr-1"
+            {/* Center area with deck and discard pile */}
+            <div className="flex justify-center items-center gap-8 mb-8">
+              {/* Draw Deck */}
+              <div className="text-center">
+                <div className="text-white/70 text-sm mb-2">Draw Deck</div>
+                <div 
+                  className="relative cursor-pointer hover:scale-105 transition-transform duration-200"
+                  onClick={() => {
+                    toast({
+                      title: "Card drawn",
+                      description: "You drew a card from the deck",
+                    });
+                  }}
                 >
-                  <line x1="21" x2="14" y1="4" y2="4"></line>
-                  <line x1="10" x2="3" y1="4" y2="4"></line>
-                  <line x1="21" x2="12" y1="12" y2="12"></line>
-                  <line x1="8" x2="3" y1="12" y2="12"></line>
-                  <line x1="21" x2="16" y1="20" y2="20"></line>
-                  <line x1="12" x2="3" y1="20" y2="20"></line>
-                  <line x1="14" x2="14" y1="2" y2="6"></line>
-                  <line x1="8" x2="8" y1="10" y2="14"></line>
-                  <line x1="16" x2="16" y1="18" y2="22"></line>
-                </svg>
-                Organize Cards
-              </Button>
-            </div>
-            <div className="flex gap-1 justify-center flex-wrap">
-              {(gameCards.playerHands[playerId] || []).map((card, index) => (
-                <div key={card.id || `card-${index}`} className="mb-4" style={{ margin: "-10px 2px" }}>
-                  <GameCard
-                    suit={card.suit}
-                    rank={card.rank}
-                    isJoker={card.isJoker}
-                    selected={selectedCards.some(c => c.id === card.id)}
-                    onClick={() => handleCardClick(card)}
-                    style={{ width: "70px", height: "98px" }}
-                    className={`transition-all duration-200 ${
-                      selectedCards.some(c => c.id === card.id) 
-                        ? 'ring-4 ring-yellow-400 shadow-lg shadow-yellow-400/50' 
-                        : 'hover:shadow-lg'
-                    }`}
+                  {/* Stack effect with multiple cards */}
+                  <div className="absolute top-1 left-1">
+                    <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                  </div>
+                  <div className="absolute top-0.5 left-0.5">
+                    <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                  </div>
+                  <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
+                  <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
+                    54 cards
+                  </div>
+                </div>
+              </div>
+
+              {/* Discard Pile */}
+              <div className="text-center">
+                <div className="text-white/70 text-sm mb-2">Discard Pile</div>
+                <div className="relative">
+                  <GameCard 
+                    suit="spades" 
+                    rank="7" 
+                    faceUp={true} 
+                    style={{ width: "80px", height: "112px" }}
+                    className="cursor-pointer hover:scale-105 transition-transform duration-200"
+                    onClick={() => {
+                      toast({
+                        title: "Card taken",
+                        description: "You took the 7 of Spades from discard pile",
+                      });
+                    }}
                   />
                 </div>
-              ))}
+              </div>
             </div>
-            {selectedCards.length > 0 && (
-              <div className="mt-3 text-center">
+
+            {/* Other Players */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+              {gameSession.players
+                .filter((player) => player.id !== playerId)
+                .map((player, index) => (
+                  <div
+                    key={player.id}
+                    className="bg-black/20 rounded-lg p-4"
+                  >
+                    <div className="flex items-center gap-2 mb-3">
+                      <div
+                        className={`w-2 h-2 rounded-full ${player.isConnected ? "bg-green-500" : "bg-red-500"}`}
+                      ></div>
+                      <span className="font-medium">{player.name}</span>
+                      <div className="text-sm text-white/70">Cards: 14</div>
+                    </div>
+                    
+                    {/* Other player's hand (face down) */}
+                    <div className="flex gap-1 justify-center overflow-x-auto">
+                      {Array.from({ length: 14 }).map((_, cardIndex) => (
+                        <div
+                          key={cardIndex}
+                          className="flex-shrink-0"
+                          style={{ 
+                            marginLeft: cardIndex > 0 ? "-25px" : "0",
+                            zIndex: cardIndex
+                          }}
+                        >
+                          <GameCard
+                            suit="hearts"
+                            rank="A"
+                            faceUp={false}
+                            style={{ 
+                              width: "40px", 
+                              height: "56px",
+                              transform: `rotate(${(cardIndex - 7) * 2}deg)`
+                            }}
+                            className="transition-transform duration-300 hover:translate-y-2"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          {/* Player's Hand */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium">Your Hand</h3>
+              <div className="flex gap-2">
                 <Button
-                  variant="outline"
                   size="sm"
-                  onClick={() => setSelectedCards([])}
-                  className="text-white border-white/30"
+                  variant="outline"
+                  className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+                  onClick={() => {
+                    toast({
+                      title: "Cards organized",
+                      description: "Your hand has been sorted by suit and rank",
+                    });
+                  }}
                 >
-                  Clear Selection ({selectedCards.length} selected)
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mr-1"
+                  >
+                    <line x1="21" x2="14" y1="4" y2="4"></line>
+                    <line x1="10" x2="3" y1="4" y2="4"></line>
+                    <line x1="21" x2="12" y1="12" y2="12"></line>
+                    <line x1="8" x2="3" y1="12" y2="12"></line>
+                    <line x1="21" x2="16" y1="20" y2="20"></line>
+                    <line x1="12" x2="3" y1="20" y2="20"></line>
+                    <line x1="14" x2="14" y1="2" y2="6"></line>
+                    <line x1="8" x2="8" y1="10" y2="14"></line>
+                    <line x1="16" x2="16" y1="18" y2="22"></line>
+                  </svg>
+                  Organize
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => {
+                    toast({
+                      title: "Turn ended",
+                      description: "You discarded a card and ended your turn",
+                    });
+                  }}
+                >
+                  End Turn
                 </Button>
               </div>
-            )}
+            </div>
+            
+            {/* Player's cards container with proper overflow handling */}
+            <div className="relative">
+              <div className="flex gap-2 justify-center overflow-x-auto pb-4" style={{ minHeight: "140px" }}>
+                {/* Player's actual hand */}
+                {[
+                  { suit: "hearts", rank: "A", isJoker: false },
+                  { suit: "hearts", rank: "2", isJoker: false },
+                  { suit: "hearts", rank: "3", isJoker: false },
+                  { suit: "diamonds", rank: "4", isJoker: false },
+                  { suit: "diamonds", rank: "5", isJoker: false },
+                  { suit: "clubs", rank: "6", isJoker: false },
+                  { suit: "clubs", rank: "7", isJoker: false },
+                  { suit: "spades", rank: "8", isJoker: true },
+                  { suit: "spades", rank: "9", isJoker: false },
+                  { suit: "spades", rank: "10", isJoker: false },
+                  { suit: "hearts", rank: "J", isJoker: false },
+                  { suit: "diamonds", rank: "Q", isJoker: false },
+                  { suit: "clubs", rank: "K", isJoker: false },
+                  { suit: "spades", rank: "A", isJoker: false },
+                ].map((card, index) => (
+                  <div
+                    key={index}
+                    className="flex-shrink-0 transition-all duration-300 hover:-translate-y-4 hover:scale-110 cursor-pointer"
+                    onClick={() => {
+                      toast({
+                        title: "Card selected",
+                        description: `Selected ${card.rank} of ${card.suit}`,
+                      });
+                    }}
+                  >
+                    <GameCard
+                      suit={card.suit as Suit}
+                      rank={card.rank as Rank}
+                      faceUp={true}
+                      isJoker={card.isJoker}
+                      style={{ 
+                        width: "85px", 
+                        height: "119px"
+                      }}
+                      className="shadow-lg"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Game Actions */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+            <div className="flex flex-wrap gap-2 justify-center">
+              <Button
+                variant="outline"
+                className="bg-blue-600/20 text-white border-blue-500 hover:bg-blue-600/40"
+              >
+                Form Meld
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-purple-600/20 text-white border-purple-500 hover:bg-purple-600/40"
+              >
+                Add to Meld
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-red-600/20 text-white border-red-500 hover:bg-red-600/40"
+              >
+                Discard
+              </Button>
+            </div>
           </div>
         </div>
       )}
