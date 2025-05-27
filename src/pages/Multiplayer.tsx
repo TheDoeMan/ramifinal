@@ -268,34 +268,42 @@ const Multiplayer = () => {
     const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
 
     // CRITICAL FIX: Ensure playerId is set if it's missing but we're in the session
-    const currentPlayerId = playerId || localStorage.getItem(PLAYER_ID_KEY);
+    let currentPlayerId = playerId || localStorage.getItem(PLAYER_ID_KEY);
     
     if (!currentPlayerId && sessionCopy.players.length > 0) {
       const { gameId: existingGameId, playerId: existingPlayerId } = checkForExistingSession();
       if (existingPlayerId && sessionCopy.players.some(p => p.id === existingPlayerId)) {
         console.log("🔧 Fixing missing playerId:", existingPlayerId);
         setPlayerId(existingPlayerId);
+        currentPlayerId = existingPlayerId;
       }
     } else if (!playerId && currentPlayerId && sessionCopy.players.some(p => p.id === currentPlayerId)) {
       console.log("🔧 Restoring playerId from localStorage:", currentPlayerId);
       setPlayerId(currentPlayerId);
     }
 
-    // Update game state if available
-    if (sessionCopy.gameState) {
+    // Update game state if available AND we have a valid playerId
+    if (sessionCopy.gameState && currentPlayerId) {
       console.log("Updating game state from session:", {
         playerHandsKeys: Object.keys(sessionCopy.gameState.playerHands),
         currentTurn: sessionCopy.gameState.currentTurn,
-        currentPlayerId: playerId
+        currentPlayerId: currentPlayerId,
+        playerHandExists: !!sessionCopy.gameState.playerHands[currentPlayerId],
+        playerHandSize: sessionCopy.gameState.playerHands[currentPlayerId]?.length || 0
       });
 
-      setGameCards({
-        playerHands: sessionCopy.gameState.playerHands,
-        drawDeck: sessionCopy.gameState.drawDeck,
-        discardPile: sessionCopy.gameState.discardPile,
-      });
-      setCurrentTurn(sessionCopy.gameState.currentTurn);
-      setTurnState(sessionCopy.gameState.turnState);
+      // Only update if this player has a hand in the game state
+      if (sessionCopy.gameState.playerHands[currentPlayerId]) {
+        setGameCards({
+          playerHands: sessionCopy.gameState.playerHands,
+          drawDeck: sessionCopy.gameState.drawDeck,
+          discardPile: sessionCopy.gameState.discardPile,
+        });
+        setCurrentTurn(sessionCopy.gameState.currentTurn);
+        setTurnState(sessionCopy.gameState.turnState);
+      } else {
+        console.warn("⚠️ Player hand not found in game state for player:", currentPlayerId);
+      }
     }
 
     // Store previous session state
@@ -727,12 +735,20 @@ const Multiplayer = () => {
       const playerHands = dealCards(deck, playerCount);
       const handsMap: Record<string, Card[]> = {};
 
+      // Ensure all players get cards, especially the current player
       gameSession.players.forEach((player, index) => {
         handsMap[player.id] = playerHands[index] || [];
         console.log(`Player ${player.name} (${player.id}) dealt ${handsMap[player.id].length} cards`);
       });
 
+      // Double-check that current player has cards
+      if (!handsMap[playerId] || handsMap[playerId].length === 0) {
+        console.error("❌ Current player has no cards dealt!", { playerId, handsMap });
+        throw new Error("Failed to deal cards to current player");
+      }
+
       console.log("🃏 Remaining deck has", deck.length, "cards");
+      console.log("🃏 All player hands:", Object.entries(handsMap).map(([id, cards]) => `${id}: ${cards.length} cards`));
 
       // Initialize turn state - first player starts
       const firstPlayer = gameSession.players[0];
@@ -753,16 +769,6 @@ const Multiplayer = () => {
         turnState: initialTurnState
       };
 
-      // Set up game cards state IMMEDIATELY
-      setGameCards({
-        playerHands: handsMap,
-        drawDeck: deck, // Remaining cards after dealing
-        discardPile: [] // Start with empty discard pile
-      });
-
-      setCurrentTurn(firstPlayer.id);
-      setTurnState(initialTurnState);
-
       console.log("🎯 First player:", firstPlayer.name, "ID:", firstPlayer.id);
 
       // Update the session in storage FIRST
@@ -775,9 +781,24 @@ const Multiplayer = () => {
 
         // Update the session with game state AFTER session state is updated
         console.log("💾 Saving initial game state to session");
-        await updateGameState(gameSession.id, initialGameState);
+        const gameStateSuccess = await updateGameState(gameSession.id, initialGameState);
+        
+        if (!gameStateSuccess) {
+          console.error("❌ Failed to save game state");
+          throw new Error("Failed to save game state");
+        }
 
-        // Update local state
+        // Set up game cards state IMMEDIATELY after successful save
+        setGameCards({
+          playerHands: handsMap,
+          drawDeck: deck,
+          discardPile: []
+        });
+
+        setCurrentTurn(firstPlayer.id);
+        setTurnState(initialTurnState);
+
+        // Update local session state
         setGameSession((prev) => {
           if (!prev) return prev;
           const updated = {
@@ -796,14 +817,8 @@ const Multiplayer = () => {
           description: "The game has begun!",
         });
 
-        // Force a session refresh for all players
-        setTimeout(async () => {
-          console.log("🔄 Forcing session refresh for all players");
-          const refreshedSession = await getGameSession(gameSession.id);
-          if (refreshedSession) {
-            handleSessionUpdate(refreshedSession);
-          }
-        }, 1000);
+        console.log("✅ Game initialization complete - all states set");
+
       } else {
         console.error("❌ Backend failed to start game");
         throw new Error("Failed to start game on backend");
@@ -1202,7 +1217,7 @@ const Multiplayer = () => {
       )}
 
       {/* Game state: playing */}
-      {gameSession?.state === "playing" && gameCards && playerId && gameSession.gameState && gameCards.playerHands[playerId] && (
+      {gameSession?.state === "playing" && gameCards && playerId && gameSession.gameState && gameCards.playerHands && gameCards.playerHands[playerId] && gameCards.playerHands[playerId].length > 0 && (
         <div className="flex-grow space-y-4">
           <div className="text-center text-green-400 mb-4">
             <h2 className="text-2xl font-semibold">Game Started!</h2>
@@ -1216,8 +1231,8 @@ const Multiplayer = () => {
           <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
             <h3 className="text-lg font-semibold mb-3">Your Hand</h3>
             <div className="flex flex-wrap gap-2">
-              {gameCards.playerHands[playerId].map((card, index) => (
-                <div key={card.id} className="relative">
+              {(gameCards.playerHands[playerId] || []).map((card, index) => (
+                <div key={card.id || `card-${index}`} className="relative">
                   <GameCard
                     suit={card.suit}
                     rank={card.rank}
@@ -1238,7 +1253,7 @@ const Multiplayer = () => {
               <div key={player.id} className="bg-black/30 backdrop-blur-md rounded-xl p-4">
                 <h3 className="text-lg font-semibold mb-2">{player.name}</h3>
                 <div className="text-sm text-white/70">
-                  Cards: {gameCards.playerHands[player.id]?.length || 0}
+                  Cards: {gameCards.playerHands && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 0}
                 </div>
                 {currentTurn === player.id && (
                   <div className="text-yellow-400 text-sm font-medium mt-1">
@@ -1254,15 +1269,15 @@ const Multiplayer = () => {
             <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 text-center">
               <h3 className="text-lg font-semibold mb-2">Draw Pile</h3>
               <div className="text-sm text-white/70">
-                {gameCards.drawDeck.length} cards remaining
+                {gameCards.drawDeck?.length || 0} cards remaining
               </div>
             </div>
             <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 text-center">
               <h3 className="text-lg font-semibold mb-2">Discard Pile</h3>
               <div className="text-sm text-white/70">
-                {gameCards.discardPile.length} cards
+                {gameCards.discardPile?.length || 0} cards
               </div>
-              {gameCards.discardPile.length > 0 && (
+              {gameCards.discardPile && gameCards.discardPile.length > 0 && (
                 <div className="mt-2">
                   <GameCard
                     suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit}
