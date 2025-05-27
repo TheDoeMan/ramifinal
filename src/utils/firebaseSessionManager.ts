@@ -6,6 +6,30 @@ import { ref, set, get, onValue, off, push, remove, serverTimestamp } from 'fire
 const GAME_ID_KEY = "current_game_id";
 const PLAYER_ID_KEY = "player_id";
 
+// Card type for game state
+export type Card = {
+  id: string;
+  suit: "hearts" | "diamonds" | "clubs" | "spades";
+  rank: "A" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "J" | "Q" | "K";
+  value: number;
+  isJoker?: boolean;
+};
+
+// Game state for multiplayer
+export type GameState = {
+  playerHands: Record<string, Card[]>;
+  drawDeck: Card[];
+  discardPile: Card[];
+  currentTurn: string;
+  turnState: {
+    currentPhase: 'draw' | 'meld' | 'discard';
+    hasDrawn: boolean;
+    drawnFromDiscard: boolean;
+    drawnCard: Card | null;
+    canEndTurn: boolean;
+  };
+};
+
 // Types for session management
 export type GameSession = {
   id: string;
@@ -13,6 +37,7 @@ export type GameSession = {
   players: SessionPlayer[];
   lastUpdated: number;
   state: "waiting" | "playing" | "ended";
+  gameState?: GameState;
 };
 
 export type SessionPlayer = {
@@ -239,6 +264,47 @@ export const updatePlayerStatus = (
       resolve(true);
     } catch (error) {
       console.error("Error updating player status:", error);
+      resolve(false);
+    }
+  });
+};
+
+/**
+ * Updates the game state in a session
+ */
+export const updateGameState = (
+  gameId: string,
+  gameState: GameState,
+): Promise<boolean> => {
+  return new Promise(async (resolve) => {
+    try {
+      const sessionRef = ref(database, `sessions/${gameId}`);
+      const snapshot = await get(sessionRef);
+
+      if (!snapshot.exists()) {
+        console.error(`Cannot update game state: Session ${gameId} not found`);
+        resolve(false);
+        return;
+      }
+
+      const session: GameSession = snapshot.val();
+
+      const updatedSession: GameSession = {
+        ...session,
+        gameState,
+        lastUpdated: Date.now(),
+      };
+
+      await set(sessionRef, updatedSession);
+
+      console.log(`Game state updated for session ${gameId}`, {
+        playerHandsKeys: Object.keys(gameState.playerHands),
+        playerHandSizes: Object.entries(gameState.playerHands).map(([id, cards]) => `${id}: ${cards.length}`),
+        currentTurn: gameState.currentTurn
+      });
+      resolve(true);
+    } catch (error) {
+      console.error("Error updating game state:", error);
       resolve(false);
     }
   });

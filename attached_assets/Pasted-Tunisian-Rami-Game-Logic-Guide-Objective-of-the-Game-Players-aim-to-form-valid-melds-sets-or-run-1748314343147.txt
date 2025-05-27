@@ -1,0 +1,120 @@
+Tunisian Rami Game Logic Guide
+🎯 Objective of the Game
+Players aim to form valid melds (sets or runs) from the cards in their hand and discard one card to end their turn, eventually trying to get rid of all cards or finish with the lowest score.
+
+1. 🔄 Game Flow (Turn-Based Loop)
+Each player's turn must follow this sequence strictly:
+
+✅ Valid Turn Steps:
+Draw One Card (from deck OR discard pile)
+
+Meld (Optional) – Lay down valid combinations (sets or runs) if player has valid ones.
+
+Discard One Card (mandatory) – Ends the turn.
+
+At any point, a player must not have more than one extra card than starting hand size (i.e. hand size = original + 1).
+
+2. 🃎 Starting the Game
+🔹 Initial Setup:
+2–4 players.
+
+Deck: 2x 52-card decks (104 cards total).
+
+Each player is dealt 14 cards.
+
+The remaining deck is the draw pile.
+
+The top card of the draw pile goes to the discard pile (if allowed by rules).
+
+3. 🧠 Player Turn Rules (Enforced Logic)
+➕ DRAW PHASE
+Player must draw one card:
+
+Either from the deck (draw pile)
+
+OR from the discard pile (top card only)
+
+❌ Player cannot draw from both.
+
+❌ Player cannot draw more than once per turn.
+
+🧩 MELD PHASE (Optional)
+Player may lay down:
+
+Set: 3 or more cards of the same rank but different suits (e.g., 7♣ 7♦ 7♠)
+
+Run: 3 or more consecutive cards of the same suit (e.g., 5♠ 6♠ 7♠)
+
+Melds must follow these rules:
+
+At least 3 cards per meld
+
+No duplicate suits in sets
+
+No repeating values in runs
+
+Melds can be added to on later turns if already laid down
+
+➖ DISCARD PHASE
+Player must discard exactly one card to the discard pile
+
+The discarded card cannot be:
+
+The same card just drawn from the discard pile (to prevent cycling)
+
+4. 🔁 Melding Scenarios
+✅ Valid Melds:
+Set: A♠ A♦ A♥
+
+Run: 9♣ 10♣ J♣
+
+❌ Invalid Melds:
+A♠ A♠ A♣ (duplicate suit)
+
+3♣ 5♣ 6♣ (non-consecutive run)
+
+2♦ 2♦ 2♦ (same suit)
+
+5. 🚫 Common Rule Violations to Prevent
+Violation	Fix Needed
+Drawing more than 1 card	Block second draw in turn
+Discarding before drawing	Disallow until draw is done
+Discarding more than 1 card	Force exactly 1 discard
+Melding invalid sets/runs	Validate before laying down
+Finishing turn without discarding	Prevent turn end without discard
+Drawing from discard then discarding same card	Disallow
+
+6. 🏁 End Game Conditions
+Game ends when a player has no cards left after discard.
+
+Or, the draw pile is empty (depending on variant rules).
+
+7. 🧮 Scoring (Basic)
+Player with no cards: 0 points
+
+Other players: Total of unmatched cards in hand
+
+Optional: Face cards = 10, Aces = 1 or 11, others = face value
+
+8. 👨‍💻 AI-Enforced Game States
+Phase	Allowed Actions	Forbidden Actions
+Draw Phase	Draw 1 card	Draw again, Discard
+Meld Phase	Lay valid melds	Lay invalid melds
+Discard Phase	Discard 1 card	Skip discard, discard 2 cards
+Post Discard	End turn	Take actions
+
+9. 🧪 Suggested Test Scenarios for Debugging
+Draw → Discard only (no meld): ensure valid loop
+
+Draw → Invalid meld → Discard: meld rejected, turn continues
+
+Draw from discard → Try to discard same card: block
+
+Attempt to meld 2 cards: block
+
+Try discarding 2 cards: block
+
+Try to end turn without discard: block
+
+Player hand count exceeds 15: reset or warn
+
