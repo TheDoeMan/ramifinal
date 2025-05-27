@@ -1,4 +1,3 @@
-
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
 import path from 'path'
@@ -18,6 +17,7 @@ export default defineConfig({
     hmr: {
       port: 5000,
     },
+    allowedHosts: ['ramifinal-1.onrender.com'], // ✅ Add this line
   },
   build: {
     outDir: 'dist',
