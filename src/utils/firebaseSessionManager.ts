@@ -297,7 +297,11 @@ export const updateGameState = (
 
       await set(sessionRef, updatedSession);
 
-      console.log(`Game state updated for session ${gameId}`);
+      console.log(`Game state updated for session ${gameId}`, {
+        playerHandsKeys: Object.keys(gameState.playerHands),
+        playerHandSizes: Object.entries(gameState.playerHands).map(([id, cards]) => `${id}: ${cards.length}`),
+        currentTurn: gameState.currentTurn
+      });
       resolve(true);
     } catch (error) {
       console.error("Error updating game state:", error);

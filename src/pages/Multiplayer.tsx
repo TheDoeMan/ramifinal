@@ -263,9 +263,15 @@ const Multiplayer = () => {
     // Force a deep copy to ensure reactivity
     const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
 
-    // Update game state if available
+    // Update game state if available - CRITICAL FIX
     if (sessionCopy.gameState) {
-      console.log("Updating game state from session");
+      console.log("Updating game state from session:", {
+        playerHandsKeys: Object.keys(sessionCopy.gameState.playerHands),
+        currentTurn: sessionCopy.gameState.currentTurn,
+        currentPlayerId: playerId
+      });
+      
+      // Force update game cards state
       setGameCards({
         playerHands: sessionCopy.gameState.playerHands,
         drawDeck: sessionCopy.gameState.drawDeck,
@@ -273,6 +279,23 @@ const Multiplayer = () => {
       });
       setCurrentTurn(sessionCopy.gameState.currentTurn);
       setTurnState(sessionCopy.gameState.turnState);
+    } else if (sessionCopy.state === "playing" && !gameCards) {
+      // If game is playing but we don't have game state, request it
+      console.log("Game is playing but no game state found - requesting update");
+      setTimeout(() => {
+        getGameSession(sessionCopy.id).then((refreshedSession) => {
+          if (refreshedSession?.gameState) {
+            console.log("Retrieved missing game state");
+            setGameCards({
+              playerHands: refreshedSession.gameState.playerHands,
+              drawDeck: refreshedSession.gameState.drawDeck,
+              discardPile: refreshedSession.gameState.discardPile,
+            });
+            setCurrentTurn(refreshedSession.gameState.currentTurn);
+            setTurnState(refreshedSession.gameState.turnState);
+          }
+        });
+      }, 500);
     }
 
     // Store previous session state
@@ -742,17 +765,17 @@ const Multiplayer = () => {
 
       console.log("🎯 First player:", firstPlayer.name, "ID:", firstPlayer.id);
 
-      // Update the session with game state
-      console.log("💾 Saving initial game state to session");
-      await updateGameState(gameSession.id, initialGameState);
-
-      // Update the session in storage
+      // Update the session in storage FIRST
       console.log("📡 Calling startGameSession...");
       const success = await startGameSession(gameSession.id, playerId);
       console.log("📡 Backend game start result:", success);
 
       if (success) {
-        console.log("✅ Backend success - updating local state");
+        console.log("✅ Backend success - now saving game state");
+        
+        // Update the session with game state AFTER session state is updated
+        console.log("💾 Saving initial game state to session");
+        await updateGameState(gameSession.id, initialGameState);
 
         // Update local state
         setGameSession((prev) => {
@@ -760,9 +783,10 @@ const Multiplayer = () => {
           const updated = {
             ...prev,
             state: "playing" as const,
+            gameState: initialGameState,
             lastUpdated: Date.now(),
           };
-          console.log("🎯 Local state updated to playing");
+          console.log("🎯 Local state updated to playing with game state");
           return updated;
         });
 
@@ -771,6 +795,15 @@ const Multiplayer = () => {
           title: "Game started!",
           description: "The game has begun!",
         });
+        
+        // Force a session refresh for all players
+        setTimeout(async () => {
+          console.log("🔄 Forcing session refresh for all players");
+          const refreshedSession = await getGameSession(gameSession.id);
+          if (refreshedSession) {
+            handleSessionUpdate(refreshedSession);
+          }
+        }, 1000);
       } else {
         console.error("❌ Backend failed to start game");
         throw new Error("Failed to start game on backend");
@@ -1739,7 +1772,18 @@ const Multiplayer = () => {
               {gameSession.players
                 .filter((player) => player.id !== playerId)
                 .map((player, index) => {
-                  const playerCardCount = gameCards && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 14;
+                  // CRITICAL FIX: Always check gameCards and playerHands
+                  const playerCardCount = gameCards && gameCards.playerHands && gameCards.playerHands[player.id] 
+                    ? gameCards.playerHands[player.id].length 
+                    : (gameSession.state === "playing" ? 14 : 0);
+                  
+                  console.log(`Player ${player.name} (${player.id}) hand count:`, playerCardCount, {
+                    hasGameCards: !!gameCards,
+                    hasPlayerHands: !!gameCards?.playerHands,
+                    hasThisPlayerHand: !!gameCards?.playerHands?.[player.id],
+                    gameState: gameSession.state
+                  });
+                  
                   return (
                     <div
                       key={player.id}
@@ -1753,6 +1797,11 @@ const Multiplayer = () => {
                         <div className="text-sm text-white/70">
                           Cards: {playerCardCount}
                         </div>
+                        {currentTurn === player.id && (
+                          <div className="text-xs bg-yellow-500 text-black px-2 py-1 rounded">
+                            Their Turn
+                          </div>
+                        )}
                       </div>
 
                       {/* Other player's hand (face down) */}
@@ -1782,7 +1831,9 @@ const Multiplayer = () => {
                             </div>
                           ))
                         ) : (
-                          <div className="text-white/50 text-sm">No cards</div>
+                          <div className="text-white/50 text-sm">
+                            {gameSession.state === "playing" ? "Loading cards..." : "No cards"}
+                          </div>
                         )}
                       </div>
                     </div>
