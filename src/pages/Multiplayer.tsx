@@ -172,40 +172,38 @@ const Multiplayer = () => {
     // Always update if this is the first update
     const isFirstUpdate = !currentSession;
 
-    // Only update if it's actually a new update
+    // Only update if it's actually a new update or first update
     if (isFirstUpdate || sessionCopy.lastUpdated > lastUpdateTime) {
       console.log("Updating session state with:", {
         players: sessionCopy.players.map((p) => p.name),
         state: sessionCopy.state,
       });
 
-      // Update session state
-      setGameSession(sessionCopy);
-      setLastUpdateTime(sessionCopy.lastUpdated);
+      // Check for actual changes before showing notifications
+      let hasPlayerChanges = false;
+      let hasReadyChanges = false;
+      let hasStateChange = false;
 
-      // Handle player join notifications (only for non-first updates)
-      if (
-        !isFirstUpdate &&
-        currentSession &&
-        sessionCopy.players.length > currentSession.players.length
-      ) {
-        // Find new players
-        const newPlayers = sessionCopy.players.filter(
-          (p) => !currentSession.players.some((cp) => cp.id === p.id),
-        );
-
-        // Show notification for each new player
-        newPlayers.forEach((player) => {
-          console.log("New player joined:", player.name);
-          toast({
-            title: "Player joined",
-            description: `${player.name} has joined the game`,
-          });
-        });
-      }
-
-      // Check if a player became ready (only for non-first updates and avoid duplicate notifications)
       if (!isFirstUpdate && currentSession) {
+        // Check for new players
+        if (sessionCopy.players.length > currentSession.players.length) {
+          const newPlayers = sessionCopy.players.filter(
+            (p) => !currentSession.players.some((cp) => cp.id === p.id),
+          );
+          
+          if (newPlayers.length > 0) {
+            hasPlayerChanges = true;
+            newPlayers.forEach((player) => {
+              console.log("New player joined:", player.name);
+              toast({
+                title: "Player joined",
+                description: `${player.name} has joined the game`,
+              });
+            });
+          }
+        }
+
+        // Check for ready status changes
         sessionCopy.players.forEach((player) => {
           const previousPlayerState = currentSession.players.find(
             (p) => p.id === player.id,
@@ -216,6 +214,7 @@ const Multiplayer = () => {
             player.isReady &&
             player.id !== playerId // Don't show notification for yourself
           ) {
+            hasReadyChanges = true;
             console.log("Player became ready:", player.name);
             toast({
               title: "Player ready",
@@ -223,94 +222,67 @@ const Multiplayer = () => {
             });
           }
         });
+
+        // Check for game state change
+        if (currentSession.state === "waiting" && sessionCopy.state === "playing") {
+          hasStateChange = true;
+          console.log("Game state changed to playing");
+          toast({
+            title: "Game started",
+            description: "The game is now starting!",
+          });
+          // Clear any countdown if game has started
+          setCountdown(null);
+          setIsCountingDown(false);
+        }
       }
 
-      // Check if game state changed to playing
-      if (
-        currentSession &&
-        currentSession.state === "waiting" &&
-        sessionCopy.state === "playing"
-      ) {
-        console.log("Game state changed to playing");
-        toast({
-          title: "Game started",
-          description: "The game is now starting!",
-        });
-        // Clear any countdown if game has started
-        setCountdown(null);
-        setIsCountingDown(false);
-      }
+      // Update session state
+      setGameSession(sessionCopy);
+      setLastUpdateTime(sessionCopy.lastUpdated);
 
-      // Auto-start game when all players are ready (for host only)
-      // Only trigger this on the initial check or when a new player becomes ready
+      // Auto-start countdown logic - only for host and only if there's an actual change
       if (
         sessionCopy.state === "waiting" &&
         sessionCopy.hostId === playerId &&
         sessionCopy.players.length >= 2 &&
         sessionCopy.players.every((p) => p.isReady) &&
         !isCountingDown &&
-        countdown === null
+        countdown === null &&
+        (isFirstUpdate || hasPlayerChanges || hasReadyChanges) // Only start countdown on actual changes
       ) {
         console.log("All players ready, starting countdown");
-        // Start countdown to auto-start the game
         setIsCountingDown(true);
         setCountdown(5); // 5 second countdown
       }
+    } else {
+      console.log("Session update ignored - no newer data");
     }
   };
 
-  // Poll for updates more frequently when waiting for players
+  // Single polling effect for session updates
   useEffect(() => {
-    if (gameSession && gameSession.state === "waiting") {
-      console.log("Setting up frequent polling for waiting room");
-      const pollInterval = setInterval(() => {
-        if (gameId) {
-          console.log("Polling for session updates");
-          getGameSession(gameId).then((updatedSession) => {
-            if (updatedSession && updatedSession.lastUpdated > lastUpdateTime) {
-              console.log("Found newer session data during polling");
-              handleSessionUpdate(updatedSession);
-            }
-          });
-        }
-      }, 1000); // Poll every 1 second for better responsiveness
-
-      return () => {
-        console.log("Clearing waiting room polling interval");
-        clearInterval(pollInterval);
-      };
-    }
-  }, [gameId, gameSession?.state]);
-
-  // Additional check for session updates
-  useEffect(() => {
-    // Only set up additional polling if not in setup screen
-    if (gameId && showSetup === false) {
-      console.log("Setting up additional session polling");
-
-      const checkInterval = setInterval(() => {
-        getGameSession(gameId).then((session) => {
-          if (session) {
-            // Always update if players count changed or state changed
-            const shouldForceUpdate =
-              gameSession &&
-              (session.players.length !== gameSession.players.length ||
-                session.state !== gameSession.state);
-
-            if (shouldForceUpdate || session.lastUpdated > lastUpdateTime) {
-              console.log("Additional polling found updated session");
-              handleSessionUpdate(session);
-            }
+    if (gameId && !showSetup && gameSession) {
+      console.log("Setting up session polling for", gameSession.state);
+      
+      // Use different polling intervals based on state
+      const pollInterval = gameSession.state === "waiting" ? 1000 : 2000;
+      
+      const interval = setInterval(() => {
+        getGameSession(gameId).then((updatedSession) => {
+          if (updatedSession && updatedSession.lastUpdated > lastUpdateTime) {
+            console.log("Found newer session data during polling");
+            handleSessionUpdate(updatedSession);
           }
         });
-      }, 1500);
+      }, pollInterval);
 
       return () => {
-        console.log("Clearing additional polling interval");
-        clearInterval(checkInterval);
+        console.log("Clearing session polling interval");
+        clearInterval(interval);
       };
     }
-  }, [gameId, showSetup, gameSession?.players.length, gameSession?.state]);
+  }, [gameId, showSetup, gameSession?.state, lastUpdateTime]);
 
   // Countdown effect for automatic game start
   useEffect(() => {
@@ -327,11 +299,26 @@ const Multiplayer = () => {
 
     const timer = setTimeout(() => {
       console.log("Countdown:", countdown - 1);
-      setCountdown(countdown - 1);
+      setCountdown(prev => prev !== null ? prev - 1 : null);
     }, 1000);
 
     return () => clearTimeout(timer);
   }, [countdown, isCountingDown]);
+
+  // Prevent countdown reset when session updates but conditions haven't changed
+  useEffect(() => {
+    if (
+      gameSession?.state === "waiting" &&
+      gameSession.hostId === playerId &&
+      gameSession.players.length >= 2 &&
+      gameSession.players.every((p) => p.isReady) &&
+      isCountingDown &&
+      countdown !== null
+    ) {
+      // Don't restart countdown if already counting down
+      console.log("Countdown already in progress, not restarting");
+    }
+  }, [gameSession?.players, gameSession?.state]);
 
   // Create a new game
   const handleCreateGame = async () => {
