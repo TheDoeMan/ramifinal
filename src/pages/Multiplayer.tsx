@@ -163,6 +163,15 @@ const Multiplayer = () => {
       lastUpdated: new Date(updatedSession.lastUpdated).toLocaleTimeString(),
     });
 
+    // Add debug logs
+    console.log("Session State:", updatedSession.state);
+    console.log("Players:", updatedSession.players.map(p => ({
+      name: p.name,
+      id: p.id,
+      isReady: p.isReady,
+      isConnected: p.isConnected
+    })));
+
     // Force a deep copy to ensure reactivity
     const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
 
@@ -250,7 +259,14 @@ const Multiplayer = () => {
         countdown === null && // Only start if no countdown is active
         (isFirstUpdate || hasPlayerChanges || hasReadyChanges) // Only start countdown on actual changes
       ) {
-        console.log("All players ready, starting countdown");
+        console.log("All players ready, starting countdown", {
+          state: sessionCopy.state,
+          hostId: sessionCopy.hostId,
+          playerId: playerId,
+          playerCount: sessionCopy.players.length,
+          allReady: sessionCopy.players.every((p) => p.isReady),
+          readyStatus: sessionCopy.players.map(p => `${p.name}: ${p.isReady}`)
+        });
         setIsCountingDown(true);
         setCountdown(5); // 5 second countdown
       }
@@ -287,22 +303,29 @@ const Multiplayer = () => {
   useEffect(() => {
     if (countdown === null) return;
 
+    console.log("Countdown effect running, countdown:", countdown);
+
     if (countdown <= 0) {
       // Start the game when countdown reaches zero
-      console.log("Countdown reached zero, starting game");
+      console.log("Countdown reached zero, calling handleStartGame");
       setIsCountingDown(false);
       setCountdown(null);
-      handleStartGame();
+      
+      // Use a small delay to ensure state updates are processed
+      setTimeout(() => {
+        console.log("Executing handleStartGame after countdown");
+        handleStartGame();
+      }, 100);
       return;
     }
 
     const timer = setTimeout(() => {
-      console.log("Countdown:", countdown - 1);
+      console.log("Countdown tick:", countdown - 1);
       setCountdown(prev => prev !== null ? prev - 1 : null);
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [countdown]); // Remove isCountingDown dependency to prevent restarts
+  }, [countdown, gameSession?.id]); // Add gameSession.id to dependencies
 
   // Create a new game
   const handleCreateGame = async () => {
@@ -515,13 +538,23 @@ const Multiplayer = () => {
 
   // Start the game (host only)
   const handleStartGame = async () => {
+    console.log("handleStartGame called", {
+      gameSession: !!gameSession,
+      playerId,
+      hostId: gameSession?.hostId,
+      isHost: playerId === gameSession?.hostId,
+      playerCount: gameSession?.players.length,
+      allReady: gameSession?.players.every((player) => player.isReady)
+    });
+
     if (!gameSession || playerId !== gameSession.hostId) {
-      console.log("Not host or no game session");
+      console.log("Not host or no game session - aborting start");
       return;
     }
 
     // Check if there are enough players
     if (gameSession.players.length < 2) {
+      console.log("Not enough players to start");
       toast({
         title: "Not enough players",
         description: "You need at least 2 players to start the game",
@@ -533,6 +566,7 @@ const Multiplayer = () => {
     // Check if all players are ready
     const allReady = gameSession.players.every((player) => player.isReady);
     if (!allReady) {
+      console.log("Not all players ready:", gameSession.players.map(p => `${p.name}: ${p.isReady}`));
       toast({
         title: "Players not ready",
         description: "All players must be ready to start the game",
@@ -542,35 +576,37 @@ const Multiplayer = () => {
     }
 
     try {
-      console.log("Starting game process...");
+      console.log("Starting game process - all checks passed");
       
       // Cancel any active countdown immediately
       setCountdown(null);
       setIsCountingDown(false);
 
-      // Optimistically update local state first for immediate UI feedback
-      setGameSession((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          state: "playing" as const,
-          lastUpdated: Date.now(),
-        };
-      });
+      // Update the session in storage FIRST
+      const success = await startGameSession(gameSession.id, playerId);
+      console.log("Backend game start result:", success);
 
-      // Show immediate feedback
-      toast({
-        title: "Game started!",
-        description: "The game has begun!",
-      });
+      if (success) {
+        // Update local state only after backend success
+        setGameSession((prev) => {
+          if (!prev) return prev;
+          const updated = {
+            ...prev,
+            state: "playing" as const,
+            lastUpdated: Date.now(),
+          };
+          console.log("Local state updated to:", updated.state);
+          return updated;
+        });
 
-      // Update the session in storage (async, don't wait for it)
-      startGameSession(gameSession.id, playerId).then(success => {
-        console.log("Backend game start result:", success);
-        if (!success) {
-          console.error("Failed to update backend, but UI is already updated");
-        }
-      });
+        // Show success feedback
+        toast({
+          title: "Game started!",
+          description: "The game has begun!",
+        });
+      } else {
+        throw new Error("Failed to start game on backend");
+      }
 
     } catch (error) {
       console.error("Error starting game:", error);
@@ -578,15 +614,6 @@ const Multiplayer = () => {
       // Reset states on error
       setCountdown(null);
       setIsCountingDown(false);
-      
-      // Revert optimistic update
-      setGameSession((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          state: "waiting" as const,
-        };
-      });
       
       toast({
         title: "Error",
