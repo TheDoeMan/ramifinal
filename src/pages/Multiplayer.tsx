@@ -140,6 +140,18 @@ const dealCards = (deck: Card[], playerCount: number) => {
   return players;
 };
 
+// Game phase types for turn enforcement
+type GamePhase = 'draw' | 'meld' | 'discard';
+
+// Turn state to track what actions are allowed
+type TurnState = {
+  currentPhase: GamePhase;
+  hasDrawn: boolean;
+  drawnFromDiscard: boolean;
+  drawnCard: Card | null;
+  canEndTurn: boolean;
+};
+
 const Multiplayer = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -165,6 +177,14 @@ const Multiplayer = () => {
     discardPile: Card[];
   } | null>(null);
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
+  const [currentTurn, setCurrentTurn] = useState<string>(''); // Player ID whose turn it is
+  const [turnState, setTurnState] = useState<TurnState>({
+    currentPhase: 'draw',
+    hasDrawn: false,
+    drawnFromDiscard: false,
+    drawnCard: null,
+    canEndTurn: false
+  });
 
   // Check for existing session on component mount
   useEffect(() => {
@@ -685,6 +705,17 @@ const Multiplayer = () => {
           discardPile: [] // Start with empty discard pile
         });
 
+        // Initialize turn state - first player starts
+        const firstPlayer = gameSession.players[0];
+        setCurrentTurn(firstPlayer.id);
+        setTurnState({
+          currentPhase: 'draw',
+          hasDrawn: false,
+          drawnFromDiscard: false,
+          drawnCard: null,
+          canEndTurn: false
+        });
+
         // Update local state
         setGameSession((prev) => {
           if (!prev) return prev;
@@ -777,6 +808,37 @@ const Multiplayer = () => {
   const handleDrawFromDeck = () => {
     if (!gameCards) return;
 
+    // Check if it's this player's turn
+    if (currentTurn !== playerId) {
+      toast({
+        title: "Not your turn",
+        description: "Wait for your turn to draw a card",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if player can draw (must be in draw phase and hasn't drawn yet)
+    if (turnState.currentPhase !== 'draw' || turnState.hasDrawn) {
+      toast({
+        title: "Invalid action",
+        description: turnState.hasDrawn ? "You've already drawn a card this turn" : "You can only draw during the draw phase",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check hand size limit (shouldn't exceed 15 cards)
+    const currentHandSize = gameCards.playerHands[playerId]?.length || 0;
+    if (currentHandSize >= 15) {
+      toast({
+        title: "Hand size limit",
+        description: "You cannot have more than 15 cards in your hand",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (gameCards.drawDeck.length === 0) {
       toast({
         title: "Empty deck",
@@ -804,9 +866,18 @@ const Multiplayer = () => {
       };
     });
 
+    // Update turn state
+    setTurnState(prev => ({
+      ...prev,
+      hasDrawn: true,
+      drawnFromDiscard: false,
+      drawnCard: gameCards.drawDeck[gameCards.drawDeck.length - 1],
+      currentPhase: 'meld'
+    }));
+
     toast({
       title: "Card drawn",
-      description: "You drew a card from the deck",
+      description: "You drew a card from the deck. You may now meld or discard.",
     });
   };
 
@@ -820,6 +891,39 @@ const Multiplayer = () => {
       });
       return;
     }
+
+    // Check if it's this player's turn
+    if (currentTurn !== playerId) {
+      toast({
+        title: "Not your turn",
+        description: "Wait for your turn to draw a card",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if player can draw (must be in draw phase and hasn't drawn yet)
+    if (turnState.currentPhase !== 'draw' || turnState.hasDrawn) {
+      toast({
+        title: "Invalid action",
+        description: turnState.hasDrawn ? "You've already drawn a card this turn" : "You can only draw during the draw phase",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check hand size limit (shouldn't exceed 15 cards)
+    const currentHandSize = gameCards.playerHands[playerId]?.length || 0;
+    if (currentHandSize >= 15) {
+      toast({
+        title: "Hand size limit",
+        description: "You cannot have more than 15 cards in your hand",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const topDiscardCard = gameCards.discardPile[gameCards.discardPile.length - 1];
 
     setGameCards(prev => {
       if (!prev) return prev;
@@ -839,9 +943,18 @@ const Multiplayer = () => {
       };
     });
 
+    // Update turn state
+    setTurnState(prev => ({
+      ...prev,
+      hasDrawn: true,
+      drawnFromDiscard: true,
+      drawnCard: topDiscardCard,
+      currentPhase: 'meld'
+    }));
+
     toast({
       title: "Card taken from discard",
-      description: `You took the ${gameCards.discardPile[gameCards.discardPile.length - 1].rank} of ${gameCards.discardPile[gameCards.discardPile.length - 1].suit}`,
+      description: `You took the ${topDiscardCard.rank} of ${topDiscardCard.suit}. You may now meld or discard (but not the same card).`,
     });
   };
 
@@ -905,6 +1018,26 @@ const Multiplayer = () => {
 
   // Form meld with selected cards
   const handleFormMeld = () => {
+    // Check if it's this player's turn
+    if (currentTurn !== playerId) {
+      toast({
+        title: "Not your turn",
+        description: "Wait for your turn to form melds",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if player has drawn a card first
+    if (!turnState.hasDrawn) {
+      toast({
+        title: "Must draw first",
+        description: "You must draw a card before forming melds",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (selectedCards.length < 3) {
       toast({
         title: "Invalid meld",
@@ -944,15 +1077,44 @@ const Multiplayer = () => {
     });
 
     setSelectedCards([]);
+
+    // Update turn state to allow discarding
+    setTurnState(prev => ({
+      ...prev,
+      currentPhase: 'discard',
+      canEndTurn: true
+    }));
     
     toast({
       title: "Meld formed",
-      description: `Successfully formed a meld with ${selectedCards.length} cards`,
+      description: `Successfully formed a meld with ${selectedCards.length} cards. Now you must discard one card.`,
     });
   };
 
   // Discard selected card
   const handleDiscardCard = () => {
+    if (!gameCards) return;
+
+    // Check if it's this player's turn
+    if (currentTurn !== playerId) {
+      toast({
+        title: "Not your turn",
+        description: "Wait for your turn to discard a card",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if player has drawn a card first
+    if (!turnState.hasDrawn) {
+      toast({
+        title: "Must draw first",
+        description: "You must draw a card before discarding",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (selectedCards.length !== 1) {
       toast({
         title: "Invalid discard",
@@ -963,6 +1125,17 @@ const Multiplayer = () => {
     }
 
     const cardToDiscard = selectedCards[0];
+
+    // Check if trying to discard the same card that was just drawn from discard pile
+    if (turnState.drawnFromDiscard && turnState.drawnCard && 
+        turnState.drawnCard.id === cardToDiscard.id) {
+      toast({
+        title: "Invalid discard",
+        description: "You cannot discard the same card you just drew from the discard pile",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setGameCards(prev => {
       if (!prev) return prev;
@@ -984,21 +1157,40 @@ const Multiplayer = () => {
     });
 
     setSelectedCards([]);
+
+    // End turn and move to next player
+    handleEndTurn();
     
     toast({
       title: "Card discarded",
-      description: `Discarded ${cardToDiscard.rank} of ${cardToDiscard.suit}`,
+      description: `Discarded ${cardToDiscard.rank} of ${cardToDiscard.suit}. Turn ended.`,
     });
   };
 
   // End turn
   const handleEndTurn = () => {
+    if (!gameSession) return;
+
     // Clear any selected cards
     setSelectedCards([]);
-    
+
+    // Move to next player
+    const currentPlayerIndex = gameSession.players.findIndex(p => p.id === currentTurn);
+    const nextPlayerIndex = (currentPlayerIndex + 1) % gameSession.players.length;
+    const nextPlayer = gameSession.players[nextPlayerIndex];
+
+    setCurrentTurn(nextPlayer.id);
+    setTurnState({
+      currentPhase: 'draw',
+      hasDrawn: false,
+      drawnFromDiscard: false,
+      drawnCard: null,
+      canEndTurn: false
+    });
+
     toast({
       title: "Turn ended",
-      description: "Your turn has ended",
+      description: `It's now ${nextPlayer.name}'s turn`,
     });
   };
 
@@ -1363,7 +1555,22 @@ const Multiplayer = () => {
           <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
             <div className="text-center mb-6">
               <h2 className="text-xl font-semibold">Game in Progress</h2>
-              <div className="text-green-400 mt-2">Current Turn: Player 1</div>
+              {gameSession && (
+                <div className="text-green-400 mt-2">
+                  Current Turn: {gameSession.players.find(p => p.id === currentTurn)?.name || 'Unknown'}
+                  {currentTurn === playerId && (
+                    <span className="ml-2 text-yellow-400">(Your Turn)</span>
+                  )}
+                </div>
+              )}
+              {currentTurn === playerId && (
+                <div className="mt-1 text-sm text-yellow-300">
+                  Phase: {turnState.currentPhase.charAt(0).toUpperCase() + turnState.currentPhase.slice(1)}
+                  {turnState.currentPhase === 'draw' && !turnState.hasDrawn && " - Draw a card"}
+                  {turnState.currentPhase === 'meld' && " - Form melds (optional) then discard"}
+                  {turnState.currentPhase === 'discard' && " - Must discard one card"}
+                </div>
+              )}
               <div className="mt-2 text-sm text-white/70 space-x-4">
                 <span>Draw Deck: {gameCards ? gameCards.drawDeck.length : 80} cards</span>
                 <span>•</span>
@@ -1548,7 +1755,11 @@ const Multiplayer = () => {
                   variant="outline"
                   className="bg-blue-600/20 text-white border-blue-500 hover:bg-blue-600/40"
                   onClick={handleFormMeld}
-                  disabled={selectedCards.length < 3}
+                  disabled={
+                    currentTurn !== playerId || 
+                    !turnState.hasDrawn || 
+                    selectedCards.length < 3
+                  }
                 >
                   Form Meld
                 </Button>
@@ -1556,7 +1767,11 @@ const Multiplayer = () => {
                   size="sm"
                   variant="outline"
                   className="bg-purple-600/20 text-white border-purple-500 hover:bg-purple-600/40"
-                  disabled={selectedCards.length === 0}
+                  disabled={
+                    currentTurn !== playerId || 
+                    !turnState.hasDrawn || 
+                    selectedCards.length === 0
+                  }
                 >
                   Add to Meld
                 </Button>
@@ -1565,17 +1780,13 @@ const Multiplayer = () => {
                   variant="outline"
                   className="bg-red-600/20 text-white border-red-500 hover:bg-red-600/40"
                   onClick={handleDiscardCard}
-                  disabled={selectedCards.length !== 1}
+                  disabled={
+                    currentTurn !== playerId || 
+                    !turnState.hasDrawn || 
+                    selectedCards.length !== 1
+                  }
                 >
-                  Discard
-                </Button>
-                
-                <Button
-                  size="sm"
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={handleEndTurn}
-                >
-                  End Turn
+                  Discard & End Turn
                 </Button>
               </div>
             </div>
