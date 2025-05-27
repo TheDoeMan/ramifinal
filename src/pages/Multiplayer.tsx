@@ -215,6 +215,196 @@ const Multiplayer = () => {
     }, 2000);
   };
 
+  // Handle drawing from deck
+  const handleDrawFromDeck = async () => {
+    if (!gameSession || !gameCards || currentTurn !== playerId || turnState.hasDrawn) {
+      return;
+    }
+
+    try {
+      if (gameCards.drawDeck.length === 0) {
+        toast({
+          title: "Empty deck",
+          description: "The draw deck is empty",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const drawnCard = gameCards.drawDeck[gameCards.drawDeck.length - 1];
+      
+      // Update local state optimistically
+      setGameCards(prev => {
+        if (!prev) return prev;
+        const newDrawDeck = [...prev.drawDeck];
+        const card = newDrawDeck.pop();
+        if (card && prev.playerHands[playerId]) {
+          return {
+            ...prev,
+            drawDeck: newDrawDeck,
+            playerHands: {
+              ...prev.playerHands,
+              [playerId]: [...prev.playerHands[playerId], card]
+            }
+          };
+        }
+        return prev;
+      });
+
+      // Update turn state
+      setTurnState(prev => ({
+        ...prev,
+        hasDrawn: true,
+        drawnFromDiscard: false,
+        drawnCard: drawnCard,
+        currentPhase: 'meld',
+        canEndTurn: true
+      }));
+
+      // Update backend
+      const updatedGameState = {
+        ...gameSession.gameState!,
+        playerHands: {
+          ...gameSession.gameState!.playerHands,
+          [playerId]: [...gameSession.gameState!.playerHands[playerId], drawnCard]
+        },
+        drawDeck: gameSession.gameState!.drawDeck.slice(0, -1),
+        turnState: {
+          currentPhase: 'meld' as const,
+          hasDrawn: true,
+          drawnFromDiscard: false,
+          drawnCard: drawnCard,
+          canEndTurn: true
+        }
+      };
+
+      await updateGameState(gameSession.id, updatedGameState);
+
+      toast({
+        title: "Card drawn",
+        description: `Drew ${drawnCard.rank} of ${drawnCard.suit}`,
+      });
+
+    } catch (error) {
+      console.error("Error drawing from deck:", error);
+      toast({
+        title: "Error",
+        description: "Failed to draw card",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handle drawing from discard pile
+  const handleDrawFromDiscard = async () => {
+    if (!gameSession || !gameCards || currentTurn !== playerId || turnState.hasDrawn || gameCards.discardPile.length === 0) {
+      return;
+    }
+
+    try {
+      const drawnCard = gameCards.discardPile[gameCards.discardPile.length - 1];
+      
+      // Update local state optimistically
+      setGameCards(prev => {
+        if (!prev) return prev;
+        const newDiscardPile = [...prev.discardPile];
+        const card = newDiscardPile.pop();
+        if (card && prev.playerHands[playerId]) {
+          return {
+            ...prev,
+            discardPile: newDiscardPile,
+            playerHands: {
+              ...prev.playerHands,
+              [playerId]: [...prev.playerHands[playerId], card]
+            }
+          };
+        }
+        return prev;
+      });
+
+      // Update turn state
+      setTurnState(prev => ({
+        ...prev,
+        hasDrawn: true,
+        drawnFromDiscard: true,
+        drawnCard: drawnCard,
+        currentPhase: 'meld',
+        canEndTurn: false // Must use the card in a meld
+      }));
+
+      // Update backend
+      const updatedGameState = {
+        ...gameSession.gameState!,
+        playerHands: {
+          ...gameSession.gameState!.playerHands,
+          [playerId]: [...gameSession.gameState!.playerHands[playerId], drawnCard]
+        },
+        discardPile: gameSession.gameState!.discardPile.slice(0, -1),
+        turnState: {
+          currentPhase: 'meld' as const,
+          hasDrawn: true,
+          drawnFromDiscard: true,
+          drawnCard: drawnCard,
+          canEndTurn: false
+        }
+      };
+
+      await updateGameState(gameSession.id, updatedGameState);
+
+      toast({
+        title: "Card taken",
+        description: `Took ${drawnCard.rank} of ${drawnCard.suit} from discard pile`,
+      });
+
+    } catch (error) {
+      console.error("Error drawing from discard:", error);
+      toast({
+        title: "Error",
+        description: "Failed to take card from discard pile",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Organize cards function
+  const organizeCards = () => {
+    if (!gameCards || !playerId) return;
+
+    setGameCards(prev => {
+      if (!prev || !prev.playerHands[playerId]) return prev;
+
+      // Sort cards by suit first, then by rank value
+      const sortedHand = [...prev.playerHands[playerId]].sort((a, b) => {
+        // First by suit
+        if (a.suit !== b.suit) {
+          // Order: hearts, diamonds, clubs, spades
+          const suitOrder = {
+            hearts: 0,
+            diamonds: 1,
+            clubs: 2,
+            spades: 3,
+          };
+          return suitOrder[a.suit] - suitOrder[b.suit];
+        }
+        // Then by value
+        return a.value - b.value;
+      });
+
+      return {
+        ...prev,
+        playerHands: {
+          ...prev.playerHands,
+          [playerId]: sortedHand
+        }
+      };
+    });
+
+    toast({
+      title: "Cards organized",
+      description: "Your hand has been sorted by suit and rank",
+    });
+  };
+
   // Check for existing session on component mount
   useEffect(() => {
     console.log("Multiplayer component mounted");
@@ -1263,7 +1453,7 @@ const Multiplayer = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
             {/* Left column - Other players */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-white">Other Players</h3>
@@ -1299,8 +1489,9 @@ const Multiplayer = () => {
               ))}
             </div>
 
-            {/* Center column - Draw and discard piles */}
-            <div className="space-y-6">
+            {/* Right column - Game area and actions */}
+            <div className="space-y-4">
+              {/* Draw and discard piles */}
               <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
                 <h3 className="text-lg font-semibold text-white mb-4 text-center">Game Area</h3>
                 
@@ -1316,12 +1507,7 @@ const Multiplayer = () => {
                             : ''
                         }`}
                         style={{ width: "80px", height: "112px" }}
-                        onClick={() => {
-                          if (currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn) {
-                            console.log("Drawing from deck");
-                            // Handle draw from deck
-                          }
-                        }}
+                        onClick={handleDrawFromDeck}
                       >
                         <GameCard
                           suit="spades"
@@ -1337,10 +1523,7 @@ const Multiplayer = () => {
                         <Button
                           className="mt-2 w-full"
                           size="sm"
-                          onClick={() => {
-                            console.log("Drawing from deck");
-                            // Handle draw from deck
-                          }}
+                          onClick={handleDrawFromDeck}
                         >
                           Draw
                         </Button>
@@ -1360,12 +1543,7 @@ const Multiplayer = () => {
                               : ''
                           }`}
                           style={{ width: "80px", height: "112px" }}
-                          onClick={() => {
-                            if (currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn) {
-                              console.log("Drawing from discard pile");
-                              // Handle draw from discard pile
-                            }
-                          }}
+                          onClick={handleDrawFromDiscard}
                         >
                           <GameCard
                             suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit}
@@ -1392,10 +1570,7 @@ const Multiplayer = () => {
                         <Button
                           className="mt-2 w-full"
                           size="sm"
-                          onClick={() => {
-                            console.log("Drawing from discard pile");
-                            // Handle draw from discard pile
-                          }}
+                          onClick={handleDrawFromDiscard}
                         >
                           Take
                         </Button>
@@ -1435,44 +1610,74 @@ const Multiplayer = () => {
                 </div>
               )}
             </div>
+          </div>
 
-            {/* Right column - Your hand */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-white">Your Hand</h3>
-              <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
-                <div className="grid grid-cols-4 gap-2">
-                  {(gameCards.playerHands[playerId] || []).map((card, index) => (
-                    <div key={card.id || `card-${index}`} className="relative">
-                      <GameCard
-                        suit={card.suit}
-                        rank={card.rank}
-                        isJoker={card.isJoker}
-                        selected={selectedCards.some(c => c.id === card.id)}
-                        onClick={() => handleCardClick(card)}
-                        style={{ width: "60px", height: "84px" }}
-                        className={`transition-all duration-200 ${
-                          selectedCards.some(c => c.id === card.id) 
-                            ? 'ring-2 ring-blue-400 shadow-lg shadow-blue-400/50' 
-                            : 'hover:shadow-lg'
-                        }`}
-                      />
-                    </div>
-                  ))}
-                </div>
-                {selectedCards.length > 0 && (
-                  <div className="mt-3 text-center">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setSelectedCards([])}
-                      className="text-white border-white/30"
-                    >
-                      Clear Selection
-                    </Button>
-                  </div>
-                )}
-              </div>
+          {/* Your hand at the bottom */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-white">Your Hand ({gameCards.playerHands[playerId]?.length || 0} cards)</h3>
+              <Button
+                size="sm"
+                variant="outline"
+                className="bg-black/50 text-white border-white/30 hover:bg-black/70"
+                onClick={organizeCards}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="mr-1"
+                >
+                  <line x1="21" x2="14" y1="4" y2="4"></line>
+                  <line x1="10" x2="3" y1="4" y2="4"></line>
+                  <line x1="21" x2="12" y1="12" y2="12"></line>
+                  <line x1="8" x2="3" y1="12" y2="12"></line>
+                  <line x1="21" x2="16" y1="20" y2="20"></line>
+                  <line x1="12" x2="3" y1="20" y2="20"></line>
+                  <line x1="14" x2="14" y1="2" y2="6"></line>
+                  <line x1="8" x2="8" y1="10" y2="14"></line>
+                  <line x1="16" x2="16" y1="18" y2="22"></line>
+                </svg>
+                Organize Cards
+              </Button>
             </div>
+            <div className="flex gap-1 justify-center flex-wrap">
+              {(gameCards.playerHands[playerId] || []).map((card, index) => (
+                <div key={card.id || `card-${index}`} className="mb-4" style={{ margin: "-10px 2px" }}>
+                  <GameCard
+                    suit={card.suit}
+                    rank={card.rank}
+                    isJoker={card.isJoker}
+                    selected={selectedCards.some(c => c.id === card.id)}
+                    onClick={() => handleCardClick(card)}
+                    style={{ width: "70px", height: "98px" }}
+                    className={`transition-all duration-200 ${
+                      selectedCards.some(c => c.id === card.id) 
+                        ? 'ring-4 ring-yellow-400 shadow-lg shadow-yellow-400/50' 
+                        : 'hover:shadow-lg'
+                    }`}
+                  />
+                </div>
+              ))}
+            </div>
+            {selectedCards.length > 0 && (
+              <div className="mt-3 text-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedCards([])}
+                  className="text-white border-white/30"
+                >
+                  Clear Selection ({selectedCards.length} selected)
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}
