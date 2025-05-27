@@ -773,6 +773,278 @@ const Multiplayer = () => {
     }
   };
 
+  // Draw card from deck
+  const handleDrawFromDeck = () => {
+    if (!gameCards) return;
+
+    if (gameCards.drawDeck.length === 0) {
+      toast({
+        title: "Empty deck",
+        description: "No more cards in the draw deck",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setGameCards(prev => {
+      if (!prev) return prev;
+      
+      const newDrawDeck = [...prev.drawDeck];
+      const drawnCard = newDrawDeck.pop();
+      
+      if (!drawnCard) return prev;
+
+      const newPlayerHands = { ...prev.playerHands };
+      newPlayerHands[playerId] = [...(newPlayerHands[playerId] || []), drawnCard];
+
+      return {
+        ...prev,
+        drawDeck: newDrawDeck,
+        playerHands: newPlayerHands
+      };
+    });
+
+    toast({
+      title: "Card drawn",
+      description: "You drew a card from the deck",
+    });
+  };
+
+  // Draw card from discard pile
+  const handleDrawFromDiscard = () => {
+    if (!gameCards || gameCards.discardPile.length === 0) {
+      toast({
+        title: "Empty discard pile",
+        description: "No cards in the discard pile",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setGameCards(prev => {
+      if (!prev) return prev;
+      
+      const newDiscardPile = [...prev.discardPile];
+      const drawnCard = newDiscardPile.pop();
+      
+      if (!drawnCard) return prev;
+
+      const newPlayerHands = { ...prev.playerHands };
+      newPlayerHands[playerId] = [...(newPlayerHands[playerId] || []), drawnCard];
+
+      return {
+        ...prev,
+        discardPile: newDiscardPile,
+        playerHands: newPlayerHands
+      };
+    });
+
+    toast({
+      title: "Card taken from discard",
+      description: `You took the ${gameCards.discardPile[gameCards.discardPile.length - 1].rank} of ${gameCards.discardPile[gameCards.discardPile.length - 1].suit}`,
+    });
+  };
+
+  // Organize cards in hand
+  const handleOrganizeCards = () => {
+    if (!gameCards) return;
+
+    setGameCards(prev => {
+      if (!prev) return prev;
+      
+      const newPlayerHands = { ...prev.playerHands };
+      const playerHand = newPlayerHands[playerId] || [];
+      
+      // Sort by suit first, then by rank value
+      const sortedHand = [...playerHand].sort((a, b) => {
+        const suitOrder = { hearts: 0, diamonds: 1, clubs: 2, spades: 3 };
+        const rankOrder = { A: 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "10": 10, J: 11, Q: 12, K: 13 };
+        
+        if (a.isJoker && !b.isJoker) return 1;
+        if (!a.isJoker && b.isJoker) return -1;
+        if (a.isJoker && b.isJoker) return 0;
+        
+        if (a.suit !== b.suit) {
+          return suitOrder[a.suit] - suitOrder[b.suit];
+        }
+        
+        return rankOrder[a.rank] - rankOrder[b.rank];
+      });
+      
+      newPlayerHands[playerId] = sortedHand;
+      
+      return {
+        ...prev,
+        playerHands: newPlayerHands
+      };
+    });
+
+    // Clear selection after organizing
+    setSelectedCards([]);
+
+    toast({
+      title: "Cards organized",
+      description: "Your hand has been sorted by suit and rank",
+    });
+  };
+
+  // Handle card click for selection
+  const handleCardClick = (card: Card) => {
+    const cardAlreadySelected = selectedCards.some(c => c.id === card.id);
+    if (cardAlreadySelected) {
+      setSelectedCards(prev => prev.filter(c => c.id !== card.id));
+    } else {
+      setSelectedCards(prev => [...prev, card]);
+    }
+    
+    toast({
+      title: cardAlreadySelected ? "Card deselected" : "Card selected",
+      description: `${cardAlreadySelected ? "Deselected" : "Selected"} ${card.rank} of ${card.suit}`,
+    });
+  };
+
+  // Form meld with selected cards
+  const handleFormMeld = () => {
+    if (selectedCards.length < 3) {
+      toast({
+        title: "Invalid meld",
+        description: "You need at least 3 cards to form a meld",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Basic validation - check if cards form a valid set or run
+    const isValidMeld = validateMeld(selectedCards);
+    
+    if (!isValidMeld) {
+      toast({
+        title: "Invalid meld",
+        description: "Selected cards don't form a valid set or run",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Remove selected cards from hand
+    setGameCards(prev => {
+      if (!prev) return prev;
+      
+      const newPlayerHands = { ...prev.playerHands };
+      const playerHand = newPlayerHands[playerId] || [];
+      
+      newPlayerHands[playerId] = playerHand.filter(card => 
+        !selectedCards.some(selected => selected.id === card.id)
+      );
+      
+      return {
+        ...prev,
+        playerHands: newPlayerHands
+      };
+    });
+
+    setSelectedCards([]);
+    
+    toast({
+      title: "Meld formed",
+      description: `Successfully formed a meld with ${selectedCards.length} cards`,
+    });
+  };
+
+  // Discard selected card
+  const handleDiscardCard = () => {
+    if (selectedCards.length !== 1) {
+      toast({
+        title: "Invalid discard",
+        description: "Select exactly one card to discard",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const cardToDiscard = selectedCards[0];
+
+    setGameCards(prev => {
+      if (!prev) return prev;
+      
+      const newPlayerHands = { ...prev.playerHands };
+      const playerHand = newPlayerHands[playerId] || [];
+      
+      // Remove card from hand
+      newPlayerHands[playerId] = playerHand.filter(card => card.id !== cardToDiscard.id);
+      
+      // Add to discard pile
+      const newDiscardPile = [...prev.discardPile, cardToDiscard];
+      
+      return {
+        ...prev,
+        playerHands: newPlayerHands,
+        discardPile: newDiscardPile
+      };
+    });
+
+    setSelectedCards([]);
+    
+    toast({
+      title: "Card discarded",
+      description: `Discarded ${cardToDiscard.rank} of ${cardToDiscard.suit}`,
+    });
+  };
+
+  // End turn
+  const handleEndTurn = () => {
+    // Clear any selected cards
+    setSelectedCards([]);
+    
+    toast({
+      title: "Turn ended",
+      description: "Your turn has ended",
+    });
+  };
+
+  // Validate if selected cards form a valid meld
+  const validateMeld = (cards: Card[]): boolean => {
+    if (cards.length < 3) return false;
+
+    // Sort cards by rank for easier validation
+    const sortedCards = [...cards].sort((a, b) => {
+      if (a.isJoker) return 1;
+      if (b.isJoker) return -1;
+      return a.value - b.value;
+    });
+
+    // Check for set (same rank, different suits)
+    const isSet = () => {
+      const nonJokers = sortedCards.filter(c => !c.isJoker);
+      if (nonJokers.length === 0) return false;
+      
+      const firstRank = nonJokers[0].rank;
+      return nonJokers.every(card => card.rank === firstRank);
+    };
+
+    // Check for run (consecutive ranks, same suit)
+    const isRun = () => {
+      const nonJokers = sortedCards.filter(c => !c.isJoker);
+      if (nonJokers.length === 0) return false;
+      
+      const firstSuit = nonJokers[0].suit;
+      if (!nonJokers.every(card => card.suit === firstSuit)) return false;
+      
+      // Check if ranks are consecutive (accounting for jokers)
+      const values = nonJokers.map(c => c.value).sort((a, b) => a - b);
+      const jokerCount = sortedCards.length - nonJokers.length;
+      
+      // Simple consecutive check - could be improved for complex joker scenarios
+      for (let i = 1; i < values.length; i++) {
+        if (values[i] - values[i-1] > 1 + jokerCount) return false;
+      }
+      
+      return true;
+    };
+
+    return isSet() || isRun();
+  };
+
   // If in setup mode, show the join/create game interface
   if (showSetup) {
     return (
@@ -1108,14 +1380,7 @@ const Multiplayer = () => {
                 <div className="text-white/70 text-sm mb-2">Draw Deck</div>
                 <div 
                   className="relative cursor-pointer hover:scale-105 transition-transform duration-200"
-                  onClick={() => {
-                    if (gameCards && gameCards.drawDeck.length > 0) {
-                      toast({
-                        title: "Card drawn",
-                        description: "You drew a card from the deck",
-                      });
-                    }
-                  }}
+                  onClick={handleDrawFromDeck}
                 >
                   {gameCards && gameCards.drawDeck.length > 0 ? (
                     <>
@@ -1172,15 +1437,8 @@ const Multiplayer = () => {
                         faceUp={true} 
                         isJoker={gameCards.discardPile[gameCards.discardPile.length - 1].isJoker}
                         style={{ width: "80px", height: "112px" }}
-                        className="cursor-pointer hover:scale-110 hover:-translate-y-2 transition-all duration-300 ease-in-out animate-pulse"
-                        onClick={() => {
-                          const topCard = gameCards.discardPile[gameCards.discardPile.length - 1];
-                          // Add visual feedback
-                          toast({
-                            title: "Card taken from discard",
-                            description: `You took the ${topCard.rank} of ${topCard.suit}`,
-                          });
-                        }}
+                        className="cursor-pointer hover:scale-110 hover:-translate-y-2 transition-all duration-300 ease-in-out"
+                        onClick={handleDrawFromDiscard}
                       />
                       <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
                         {gameCards.discardPile.length} card{gameCards.discardPile.length !== 1 ? 's' : ''}
@@ -1257,12 +1515,7 @@ const Multiplayer = () => {
                   size="sm"
                   variant="outline"
                   className="bg-black/50 text-white border-white/30 hover:bg-black/70"
-                  onClick={() => {
-                    toast({
-                      title: "Cards organized",
-                      description: "Your hand has been sorted by suit and rank",
-                    });
-                  }}
+                  onClick={handleOrganizeCards}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -1288,15 +1541,39 @@ const Multiplayer = () => {
                   </svg>
                   Organize
                 </Button>
+                
+                {/* Game Actions moved here */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-blue-600/20 text-white border-blue-500 hover:bg-blue-600/40"
+                  onClick={handleFormMeld}
+                  disabled={selectedCards.length < 3}
+                >
+                  Form Meld
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-purple-600/20 text-white border-purple-500 hover:bg-purple-600/40"
+                  disabled={selectedCards.length === 0}
+                >
+                  Add to Meld
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-red-600/20 text-white border-red-500 hover:bg-red-600/40"
+                  onClick={handleDiscardCard}
+                  disabled={selectedCards.length !== 1}
+                >
+                  Discard
+                </Button>
+                
                 <Button
                   size="sm"
                   className="bg-green-600 hover:bg-green-700"
-                  onClick={() => {
-                    toast({
-                      title: "Turn ended",
-                      description: "You discarded a card and ended your turn",
-                    });
-                  }}
+                  onClick={handleEndTurn}
                 >
                   End Turn
                 </Button>
@@ -1318,18 +1595,7 @@ const Multiplayer = () => {
                           zIndex: isSelected ? 100 : index,
                           animationDelay: `${index * 50}ms`
                         }}
-                        onClick={() => {
-                          const cardAlreadySelected = selectedCards.some(c => c.id === card.id);
-                          if (cardAlreadySelected) {
-                            setSelectedCards(prev => prev.filter(c => c.id !== card.id));
-                          } else {
-                            setSelectedCards(prev => [...prev, card]);
-                          }
-                          toast({
-                            title: isSelected ? "Card deselected" : "Card selected",
-                            description: `${isSelected ? "Deselected" : "Selected"} ${card.rank} of ${card.suit}`,
-                          });
-                        }}
+                        onClick={() => handleCardClick(card)}
                       >
                         <GameCard
                           suit={card.suit}
@@ -1355,30 +1621,6 @@ const Multiplayer = () => {
                   ))
                 }
               </div>
-            </div>
-          </div>
-
-          {/* Game Actions */}
-          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
-            <div className="flex flex-wrap gap-2 justify-center">
-              <Button
-                variant="outline"
-                className="bg-blue-600/20 text-white border-blue-500 hover:bg-blue-600/40"
-              >
-                Form Meld
-              </Button>
-              <Button
-                variant="outline"
-                className="bg-purple-600/20 text-white border-purple-500 hover:bg-purple-600/40"
-              >
-                Add to Meld
-              </Button>
-              <Button
-                variant="outline"
-                className="bg-red-600/20 text-white border-red-500 hover:bg-red-600/40"
-              >
-                Discard
-              </Button>
             </div>
           </div>
         </div>
