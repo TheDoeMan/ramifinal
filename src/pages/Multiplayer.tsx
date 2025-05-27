@@ -25,8 +25,10 @@ import {
   startGameSession as startFirebaseSession,
   startSessionMonitoring as startFirebaseMonitoring,
   checkForExistingSession as checkFirebaseSession,
+  updateGameState as updateFirebaseGameState,
   type GameSession,
   type SessionPlayer,
+  type GameState as SharedGameState,
 } from "@/utils/firebaseSessionManager";
 
 import {
@@ -55,6 +57,7 @@ const leaveGameSession = isFirebaseConfigured() ? leaveFirebaseSession : leaveLo
 const startGameSession = isFirebaseConfigured() ? startFirebaseSession : startLocalSession;
 const startSessionMonitoring = isFirebaseConfigured() ? startFirebaseMonitoring : startLocalMonitoring;
 const checkForExistingSession = isFirebaseConfigured() ? checkFirebaseSession : checkLocalSession;
+const updateGameState = isFirebaseConfigured() ? updateFirebaseGameState : (() => Promise.resolve(false));
 
 // Types for multiplayer game
 type Card = {
@@ -245,6 +248,7 @@ const Multiplayer = () => {
       id: updatedSession.id,
       players: updatedSession.players.length,
       lastUpdated: new Date(updatedSession.lastUpdated).toLocaleTimeString(),
+      hasGameState: !!updatedSession.gameState,
     });
 
     // Add debug logs
@@ -258,6 +262,18 @@ const Multiplayer = () => {
 
     // Force a deep copy to ensure reactivity
     const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
+
+    // Update game state if available
+    if (sessionCopy.gameState) {
+      console.log("Updating game state from session");
+      setGameCards({
+        playerHands: sessionCopy.gameState.playerHands,
+        drawDeck: sessionCopy.gameState.drawDeck,
+        discardPile: sessionCopy.gameState.discardPile,
+      });
+      setCurrentTurn(sessionCopy.gameState.currentTurn);
+      setTurnState(sessionCopy.gameState.turnState);
+    }
 
     // Store previous session state
     const currentSession = gameSession;
@@ -695,6 +711,25 @@ const Multiplayer = () => {
 
       console.log("🃏 Remaining deck has", deck.length, "cards");
 
+      // Initialize turn state - first player starts
+      const firstPlayer = gameSession.players[0];
+      const initialTurnState = {
+        currentPhase: 'draw' as const,
+        hasDrawn: false,
+        drawnFromDiscard: false,
+        drawnCard: null,
+        canEndTurn: false
+      };
+
+      // Create initial game state
+      const initialGameState: SharedGameState = {
+        playerHands: handsMap,
+        drawDeck: deck,
+        discardPile: [],
+        currentTurn: firstPlayer.id,
+        turnState: initialTurnState
+      };
+
       // Set up game cards state IMMEDIATELY
       setGameCards({
         playerHands: handsMap,
@@ -702,18 +737,14 @@ const Multiplayer = () => {
         discardPile: [] // Start with empty discard pile
       });
 
-      // Initialize turn state - first player starts
-      const firstPlayer = gameSession.players[0];
       setCurrentTurn(firstPlayer.id);
-      setTurnState({
-        currentPhase: 'draw',
-        hasDrawn: false,
-        drawnFromDiscard: false,
-        drawnCard: null,
-        canEndTurn: false
-      });
+      setTurnState(initialTurnState);
 
       console.log("🎯 First player:", firstPlayer.name, "ID:", firstPlayer.id);
+
+      // Update the session with game state
+      console.log("💾 Saving initial game state to session");
+      await updateGameState(gameSession.id, initialGameState);
 
       // Update the session in storage
       console.log("📡 Calling startGameSession...");
@@ -812,8 +843,8 @@ const Multiplayer = () => {
   };
 
   // Draw card from deck
-  const handleDrawFromDeck = () => {
-    if (!gameCards) return;
+  const handleDrawFromDeck = async () => {
+    if (!gameCards || !gameSession) return;
 
     // Check if it's this player's turn
     if (currentTurn !== playerId) {
@@ -855,32 +886,42 @@ const Multiplayer = () => {
       return;
     }
 
-    setGameCards(prev => {
-      if (!prev) return prev;
-      
-      const newDrawDeck = [...prev.drawDeck];
-      const drawnCard = newDrawDeck.pop();
-      
-      if (!drawnCard) return prev;
+    const newDrawDeck = [...gameCards.drawDeck];
+    const drawnCard = newDrawDeck.pop();
+    
+    if (!drawnCard) return;
 
-      const newPlayerHands = { ...prev.playerHands };
-      newPlayerHands[playerId] = [...(newPlayerHands[playerId] || []), drawnCard];
+    const newPlayerHands = { ...gameCards.playerHands };
+    newPlayerHands[playerId] = [...(newPlayerHands[playerId] || []), drawnCard];
 
-      return {
-        ...prev,
-        drawDeck: newDrawDeck,
-        playerHands: newPlayerHands
-      };
-    });
-
-    // Update turn state
-    setTurnState(prev => ({
-      ...prev,
+    const newTurnState = {
+      ...turnState,
       hasDrawn: true,
       drawnFromDiscard: false,
-      drawnCard: gameCards.drawDeck[gameCards.drawDeck.length - 1],
-      currentPhase: 'meld'
-    }));
+      drawnCard: drawnCard,
+      currentPhase: 'meld' as const
+    };
+
+    const updatedGameCards = {
+      ...gameCards,
+      drawDeck: newDrawDeck,
+      playerHands: newPlayerHands
+    };
+
+    // Update local state
+    setGameCards(updatedGameCards);
+    setTurnState(newTurnState);
+
+    // Sync to server
+    const updatedGameState: SharedGameState = {
+      playerHands: newPlayerHands,
+      drawDeck: newDrawDeck,
+      discardPile: gameCards.discardPile,
+      currentTurn: currentTurn,
+      turnState: newTurnState
+    };
+
+    await updateGameState(gameSession.id, updatedGameState);
 
     toast({
       title: "Card drawn",
