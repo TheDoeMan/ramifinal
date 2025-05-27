@@ -87,7 +87,7 @@ const createDeck = (): Card[] => {
   const cards: Card[] = [];
   const suits: Suit[] = ["hearts", "diamonds", "clubs", "spades"];
   const ranks: Rank[] = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
-  
+
   // Add two complete decks (104 cards)
   for (let deckNum = 0; deckNum < 2; deckNum++) {
     suits.forEach(suit => {
@@ -102,7 +102,7 @@ const createDeck = (): Card[] => {
       });
     });
   }
-  
+
   // Add 4 jokers
   for (let i = 0; i < 4; i++) {
     cards.push({
@@ -113,13 +113,13 @@ const createDeck = (): Card[] => {
       isJoker: true
     });
   }
-  
+
   // Shuffle the deck
   for (let i = cards.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [cards[i], cards[j]] = [cards[j], cards[i]];
   }
-  
+
   return cards;
 };
 
@@ -127,7 +127,7 @@ const createDeck = (): Card[] => {
 const dealCards = (deck: Card[], playerCount: number) => {
   const players: Card[][] = Array(playerCount).fill(null).map(() => []);
   const cardsPerPlayer = 14;
-  
+
   // Deal 14 cards to each player
   for (let i = 0; i < cardsPerPlayer; i++) {
     for (let p = 0; p < playerCount; p++) {
@@ -136,7 +136,7 @@ const dealCards = (deck: Card[], playerCount: number) => {
       }
     }
   }
-  
+
   return players;
 };
 
@@ -263,7 +263,7 @@ const Multiplayer = () => {
           const newPlayers = sessionCopy.players.filter(
             (p) => !currentSession.players.some((cp) => cp.id === p.id),
           );
-          
+
           if (newPlayers.length > 0) {
             hasPlayerChanges = true;
             newPlayers.forEach((player) => {
@@ -350,10 +350,10 @@ const Multiplayer = () => {
   useEffect(() => {
     if (gameId && !showSetup && gameSession) {
       console.log("Setting up session polling for", gameSession.state);
-      
+
       // Use different polling intervals based on state
       const pollInterval = gameSession.state === "waiting" ? 1000 : 2000;
-      
+
       const interval = setInterval(() => {
         getGameSession(gameId).then((updatedSession) => {
           if (updatedSession && updatedSession.lastUpdated > lastUpdateTime) {
@@ -381,7 +381,7 @@ const Multiplayer = () => {
       console.log("🚀 Countdown reached zero - starting game");
       setIsCountingDown(false);
       setCountdown(null);
-      
+
       // Call handleStartGame immediately - no delay needed
       handleStartGame();
       return;
@@ -421,6 +421,8 @@ const Multiplayer = () => {
 
       setGameId(newGameId);
       setPlayerId(newPlayerId);
+
+      console.log("Setting playerId to:", newPlayerId);
 
       // Get initial session state
       const session = await getGameSession(newGameId);
@@ -495,6 +497,8 @@ const Multiplayer = () => {
 
       console.log("Join successful, player ID:", newPlayerId);
       setPlayerId(newPlayerId!);
+
+      console.log("Setting playerId to:", newPlayerId);
 
       // Get session details - retry a few times if needed
       let session = null;
@@ -651,7 +655,7 @@ const Multiplayer = () => {
 
     try {
       console.log("✅ All checks passed - starting game process");
-      
+
       // Cancel any active countdown immediately
       setCountdown(null);
       setIsCountingDown(false);
@@ -663,24 +667,24 @@ const Multiplayer = () => {
 
       if (success) {
         console.log("✅ Backend success - updating local state");
-        
+
         // Initialize game cards
         const deck = createDeck();
         const playerCount = gameSession.players.length;
         const playerHands = dealCards(deck, playerCount);
         const handsMap: Record<string, Card[]> = {};
-        
+
         gameSession.players.forEach((player, index) => {
           handsMap[player.id] = playerHands[index] || [];
         });
-        
+
         // Set up game cards state
         setGameCards({
           playerHands: handsMap,
           drawDeck: deck, // Remaining cards after dealing
           discardPile: [] // Start with empty discard pile
         });
-        
+
         // Update local state
         setGameSession((prev) => {
           if (!prev) return prev;
@@ -705,11 +709,11 @@ const Multiplayer = () => {
 
     } catch (error) {
       console.error("💥 Error starting game:", error);
-      
+
       // Reset states on error
       setCountdown(null);
       setIsCountingDown(false);
-      
+
       toast({
         title: "Error",
         description: "Failed to start the game. Please try again.",
@@ -1211,7 +1215,7 @@ const Multiplayer = () => {
                           Cards: {playerCardCount}
                         </div>
                       </div>
-                      
+
                       {/* Other player's hand (face down) */}
                       <div className="flex gap-1 justify-center overflow-visible" style={{ minHeight: "60px" }}>
                         {Array.from({ length: playerCardCount }).map((_, cardIndex) => (
@@ -1298,7 +1302,7 @@ const Multiplayer = () => {
                 </Button>
               </div>
             </div>
-            
+
             {/* Player's cards container with proper overflow handling */}
             <div className="relative" style={{ minHeight: "160px", overflow: "visible" }}>
               <div className="flex gap-2 justify-center" style={{ paddingBottom: "40px", overflow: "visible" }}>
