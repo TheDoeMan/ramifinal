@@ -31,6 +31,9 @@ import {
   type GameState as SharedGameState,
 } from "@/utils/firebaseSessionManager";
 
+// Storage keys
+const PLAYER_ID_KEY = "player_id";
+
 import {
   createGameSession as createLocalSession,
   joinGameSession as joinLocalSession,
@@ -265,12 +268,17 @@ const Multiplayer = () => {
     const sessionCopy = JSON.parse(JSON.stringify(updatedSession));
 
     // CRITICAL FIX: Ensure playerId is set if it's missing but we're in the session
-    if (!playerId && sessionCopy.players.length > 0) {
+    const currentPlayerId = playerId || localStorage.getItem(PLAYER_ID_KEY);
+    
+    if (!currentPlayerId && sessionCopy.players.length > 0) {
       const { gameId: existingGameId, playerId: existingPlayerId } = checkForExistingSession();
       if (existingPlayerId && sessionCopy.players.some(p => p.id === existingPlayerId)) {
         console.log("🔧 Fixing missing playerId:", existingPlayerId);
         setPlayerId(existingPlayerId);
       }
+    } else if (!playerId && currentPlayerId && sessionCopy.players.some(p => p.id === currentPlayerId)) {
+      console.log("🔧 Restoring playerId from localStorage:", currentPlayerId);
+      setPlayerId(currentPlayerId);
     }
 
     // Update game state if available
@@ -1178,29 +1186,94 @@ const Multiplayer = () => {
       )}
 
       {/* Game state: playing but cards not loaded yet */}
-      {gameSession?.state === "playing" && (!gameCards || !playerId) && (
+      {gameSession?.state === "playing" && (!gameCards || !playerId || !gameSession.gameState) && (
         <div className="flex-grow bg-black/30 backdrop-blur-md rounded-xl p-6">
           <div className="text-center">
             <h2 className="text-2xl font-semibold mb-4">Loading Game...</h2>
             <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-white mx-auto mb-4"></div>
             <p className="text-white/70">
-              {!playerId ? "Identifying player..." : "Setting up the game board and dealing cards..."}
+              {!playerId ? "Identifying player..." : !gameSession.gameState ? "Waiting for game state..." : "Setting up the game board and dealing cards..."}
             </p>
             <div className="mt-4 text-sm text-white/50">
-              Debug: Game ID: {gameSession.id} | Players: {gameSession.players.length} | PlayerId: {playerId || "NOT SET"}
+              Debug: Game ID: {gameSession.id} | Players: {gameSession.players.length} | PlayerId: {playerId || "NOT SET"} | GameState: {gameSession.gameState ? "YES" : "NO"}
             </div>
           </div>
         </div>
       )}
 
       {/* Game state: playing */}
-      {gameSession?.state === "playing" && gameCards && playerId && (
+      {gameSession?.state === "playing" && gameCards && playerId && gameSession.gameState && gameCards.playerHands[playerId] && (
         <div className="flex-grow space-y-4">
           <div className="text-center text-green-400 mb-4">
             <h2 className="text-2xl font-semibold">Game Started!</h2>
             <p>Cards have been dealt. Game is ready to play!</p>
             <div className="mt-2 text-sm text-white/70">
-              Your hand: {gameCards.playerHands[playerId]?.length || 0} cards
+              Your hand: {gameCards.playerHands[playerId]?.length || 0} cards | Current turn: {gameSession.players.find(p => p.id === currentTurn)?.name || "Unknown"}
+            </div>
+          </div>
+          
+          {/* Player's hand */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+            <h3 className="text-lg font-semibold mb-3">Your Hand</h3>
+            <div className="flex flex-wrap gap-2">
+              {gameCards.playerHands[playerId].map((card, index) => (
+                <div key={card.id} className="relative">
+                  <GameCard
+                    suit={card.suit}
+                    rank={card.rank}
+                    isSelected={selectedCards.some(c => c.id === card.id)}
+                    onClick={() => {
+                      console.log("Card clicked:", card);
+                      // Handle card selection logic here
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Other players */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {gameSession.players.filter(p => p.id !== playerId).map(player => (
+              <div key={player.id} className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+                <h3 className="text-lg font-semibold mb-2">{player.name}</h3>
+                <div className="text-sm text-white/70">
+                  Cards: {gameCards.playerHands[player.id]?.length || 0}
+                </div>
+                {currentTurn === player.id && (
+                  <div className="text-yellow-400 text-sm font-medium mt-1">
+                    Current turn
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Draw and discard piles */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 text-center">
+              <h3 className="text-lg font-semibold mb-2">Draw Pile</h3>
+              <div className="text-sm text-white/70">
+                {gameCards.drawDeck.length} cards remaining
+              </div>
+            </div>
+            <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 text-center">
+              <h3 className="text-lg font-semibold mb-2">Discard Pile</h3>
+              <div className="text-sm text-white/70">
+                {gameCards.discardPile.length} cards
+              </div>
+              {gameCards.discardPile.length > 0 && (
+                <div className="mt-2">
+                  <GameCard
+                    suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit}
+                    rank={gameCards.discardPile[gameCards.discardPile.length - 1].rank}
+                    onClick={() => {
+                      console.log("Discard pile clicked");
+                      // Handle discard pile click
+                    }}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
