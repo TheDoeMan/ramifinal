@@ -17,7 +17,17 @@ export default defineConfig({
     hmr: {
       port: 5000,
     },
-    allowedHosts: ['ramifinal-1.onrender.com'], // ✅ Add this line
+    allowedHosts: [
+      'ramifinal-1.onrender.com',
+      '8b6d3beb-3da8-4a12-8d97-d339c289b320-00-1iqb5e6mlt4nk.kirk.replit.dev',
+    ],
+  },
+  preview: {
+    port: 5000,
+    allowedHosts: [
+      'ramifinal-1.onrender.com',
+      '8b6d3beb-3da8-4a12-8d97-d339c289b320-00-1iqb5e6mlt4nk.kirk.replit.dev',
+    ],
   },
   build: {
     outDir: 'dist',
