@@ -680,6 +680,41 @@ const Multiplayer = () => {
       setCountdown(null);
       setIsCountingDown(false);
 
+      // Initialize game cards FIRST before updating session
+      const deck = createDeck();
+      console.log("🃏 Created deck with", deck.length, "cards");
+      
+      const playerCount = gameSession.players.length;
+      const playerHands = dealCards(deck, playerCount);
+      const handsMap: Record<string, Card[]> = {};
+
+      gameSession.players.forEach((player, index) => {
+        handsMap[player.id] = playerHands[index] || [];
+        console.log(`Player ${player.name} (${player.id}) dealt ${handsMap[player.id].length} cards`);
+      });
+
+      console.log("🃏 Remaining deck has", deck.length, "cards");
+
+      // Set up game cards state IMMEDIATELY
+      setGameCards({
+        playerHands: handsMap,
+        drawDeck: deck, // Remaining cards after dealing
+        discardPile: [] // Start with empty discard pile
+      });
+
+      // Initialize turn state - first player starts
+      const firstPlayer = gameSession.players[0];
+      setCurrentTurn(firstPlayer.id);
+      setTurnState({
+        currentPhase: 'draw',
+        hasDrawn: false,
+        drawnFromDiscard: false,
+        drawnCard: null,
+        canEndTurn: false
+      });
+
+      console.log("🎯 First player:", firstPlayer.name, "ID:", firstPlayer.id);
+
       // Update the session in storage
       console.log("📡 Calling startGameSession...");
       const success = await startGameSession(gameSession.id, playerId);
@@ -687,34 +722,6 @@ const Multiplayer = () => {
 
       if (success) {
         console.log("✅ Backend success - updating local state");
-
-        // Initialize game cards
-        const deck = createDeck();
-        const playerCount = gameSession.players.length;
-        const playerHands = dealCards(deck, playerCount);
-        const handsMap: Record<string, Card[]> = {};
-
-        gameSession.players.forEach((player, index) => {
-          handsMap[player.id] = playerHands[index] || [];
-        });
-
-        // Set up game cards state
-        setGameCards({
-          playerHands: handsMap,
-          drawDeck: deck, // Remaining cards after dealing
-          discardPile: [] // Start with empty discard pile
-        });
-
-        // Initialize turn state - first player starts
-        const firstPlayer = gameSession.players[0];
-        setCurrentTurn(firstPlayer.id);
-        setTurnState({
-          currentPhase: 'draw',
-          hasDrawn: false,
-          drawnFromDiscard: false,
-          drawnCard: null,
-          canEndTurn: false
-        });
 
         // Update local state
         setGameSession((prev) => {
@@ -1137,6 +1144,15 @@ const Multiplayer = () => {
       return;
     }
 
+    // Animate discard with visual feedback
+    const cardElement = document.querySelector(`[data-card-id="${cardToDiscard.id}"]`);
+    if (cardElement) {
+      cardElement.classList.add('animate-pulse');
+      setTimeout(() => {
+        cardElement.classList.remove('animate-pulse');
+      }, 500);
+    }
+
     setGameCards(prev => {
       if (!prev) return prev;
       
@@ -1146,7 +1162,7 @@ const Multiplayer = () => {
       // Remove card from hand
       newPlayerHands[playerId] = playerHand.filter(card => card.id !== cardToDiscard.id);
       
-      // Add to discard pile
+      // Add to discard pile with animation effect
       const newDiscardPile = [...prev.discardPile, cardToDiscard];
       
       return {
@@ -1586,21 +1602,25 @@ const Multiplayer = () => {
               <div className="text-center">
                 <div className="text-white/70 text-sm mb-2">Draw Deck</div>
                 <div 
-                  className="relative cursor-pointer hover:scale-105 transition-transform duration-200"
+                  className={`relative transition-transform duration-200 ${
+                    currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn 
+                      ? 'cursor-pointer hover:scale-105 ring-2 ring-blue-400 ring-opacity-50 rounded-lg' 
+                      : 'cursor-not-allowed opacity-60'
+                  }`}
                   onClick={handleDrawFromDeck}
                 >
                   {gameCards && gameCards.drawDeck.length > 0 ? (
                     <>
                       {/* Stack effect with multiple cards */}
-                      <div className="absolute top-1 left-1">
+                      <div className="absolute top-1 left-1 opacity-70">
                         <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
                       </div>
-                      <div className="absolute top-0.5 left-0.5">
+                      <div className="absolute top-0.5 left-0.5 opacity-85">
                         <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
                       </div>
                       <GameCard suit="hearts" rank="A" faceUp={false} style={{ width: "80px", height: "112px" }} />
-                      <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
-                        {gameCards.drawDeck.length} cards
+                      <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-white/70 text-sm font-medium">
+                        {gameCards.drawDeck.length}
                       </div>
                     </>
                   ) : (
@@ -1614,9 +1634,16 @@ const Multiplayer = () => {
               {/* Discard Pile */}
               <div className="text-center">
                 <div className="text-white/70 text-sm mb-2">Discard Pile</div>
-                <div className="relative" style={{ minHeight: "120px" }}>
+                <div className="relative" style={{ minHeight: "140px" }}>
                   {gameCards && gameCards.discardPile.length > 0 ? (
-                    <div className="relative">
+                    <div 
+                      className={`relative transition-transform duration-200 ${
+                        currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn 
+                          ? 'cursor-pointer hover:scale-110 hover:-translate-y-2 ring-2 ring-green-400 ring-opacity-50 rounded-lg' 
+                          : 'cursor-not-allowed opacity-60'
+                      }`}
+                      onClick={handleDrawFromDiscard}
+                    >
                       {/* Show stack effect for multiple cards */}
                       {gameCards.discardPile.length > 1 && (
                         <>
@@ -1644,11 +1671,10 @@ const Multiplayer = () => {
                         faceUp={true} 
                         isJoker={gameCards.discardPile[gameCards.discardPile.length - 1].isJoker}
                         style={{ width: "80px", height: "112px" }}
-                        className="cursor-pointer hover:scale-110 hover:-translate-y-2 transition-all duration-300 ease-in-out"
-                        onClick={handleDrawFromDiscard}
+                        className="transition-all duration-300 ease-in-out"
                       />
-                      <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-white/50 text-xs">
-                        {gameCards.discardPile.length} card{gameCards.discardPile.length !== 1 ? 's' : ''}
+                      <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-white/70 text-sm font-medium">
+                        {gameCards.discardPile.length}
                       </div>
                     </div>
                   ) : (
@@ -1683,29 +1709,33 @@ const Multiplayer = () => {
 
                       {/* Other player's hand (face down) */}
                       <div className="flex gap-1 justify-center overflow-visible" style={{ minHeight: "60px" }}>
-                        {Array.from({ length: playerCardCount }).map((_, cardIndex) => (
-                          <div
-                            key={`${player.id}-card-${cardIndex}`}
-                            className="flex-shrink-0 transition-all duration-500 ease-in-out"
-                            style={{ 
-                              marginLeft: cardIndex > 0 ? "-25px" : "0",
-                              zIndex: cardIndex,
-                              transform: `rotate(${(cardIndex - Math.floor(playerCardCount/2)) * 3}deg)`,
-                              transition: "all 0.5s cubic-bezier(0.4, 0, 0.2, 1)"
-                            }}
-                          >
-                            <GameCard
-                              suit="hearts"
-                              rank="A"
-                              faceUp={false}
+                        {playerCardCount > 0 ? (
+                          Array.from({ length: Math.min(playerCardCount, 14) }).map((_, cardIndex) => (
+                            <div
+                              key={`${player.id}-card-${cardIndex}`}
+                              className="flex-shrink-0 transition-all duration-500 ease-in-out"
                               style={{ 
-                                width: "40px", 
-                                height: "56px"
+                                marginLeft: cardIndex > 0 ? "-20px" : "0",
+                                zIndex: cardIndex,
+                                transform: `rotate(${(cardIndex - Math.floor(playerCardCount/2)) * 2}deg)`,
+                                transition: "all 0.5s cubic-bezier(0.4, 0, 0.2, 1)"
                               }}
-                              className="transition-all duration-500 ease-in-out hover:translate-y-2 hover:scale-110"
-                            />
-                          </div>
-                        ))}
+                            >
+                              <GameCard
+                                suit="hearts"
+                                rank="A"
+                                faceUp={false}
+                                style={{ 
+                                  width: "35px", 
+                                  height: "49px"
+                                }}
+                                className="transition-all duration-500 ease-in-out hover:translate-y-1 hover:scale-105"
+                              />
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-white/50 text-sm">No cards</div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1801,6 +1831,7 @@ const Multiplayer = () => {
                     return (
                       <div
                         key={card.id}
+                        data-card-id={card.id}
                         className={`flex-shrink-0 transition-all duration-500 hover:-translate-y-8 hover:scale-110 cursor-pointer card-deal-animation ${isSelected ? 'transform -translate-y-4 scale-105' : ''}`}
                         style={{ 
                           zIndex: isSelected ? 100 : index,
@@ -1817,7 +1848,7 @@ const Multiplayer = () => {
                             width: "85px", 
                             height: "119px"
                           }}
-                          className={`shadow-lg transition-all duration-300 ${isSelected ? 'ring-4 ring-yellow-400 ring-opacity-100' : ''}`}
+                          className={`shadow-lg transition-all duration-300 ${isSelected ? 'ring-4 ring-yellow-400 ring-opacity-100 shadow-2xl shadow-yellow-400/50' : ''}`}
                         />
                       </div>
                     );
