@@ -192,6 +192,29 @@ const Multiplayer = () => {
     canEndTurn: false
   });
 
+  // Handle card selection/deselection in hand
+  const handleCardClick = (card: Card) => {
+    const cardAlreadySelected = selectedCards.some(c => c.id === card.id);
+    
+    if (cardAlreadySelected) {
+      setSelectedCards(prev => prev.filter(c => c.id !== card.id));
+    } else {
+      setSelectedCards(prev => [...prev, card]);
+    }
+    
+    // Show brief notification that auto-dismisses after 2 seconds
+    const { dismiss } = toast({
+      title: `${selectedCards.length + (cardAlreadySelected ? -1 : 1)} cards selected`,
+      description: `${cardAlreadySelected ? "Deselected" : "Selected"} ${card.rank} of ${card.suit}`,
+      duration: 2000,
+    });
+    
+    // Auto-dismiss after 2 seconds
+    setTimeout(() => {
+      dismiss();
+    }, 2000);
+  };
+
   // Check for existing session on component mount
   useEffect(() => {
     console.log("Multiplayer component mounted");
@@ -1218,77 +1241,237 @@ const Multiplayer = () => {
 
       {/* Game state: playing */}
       {gameSession?.state === "playing" && gameCards && playerId && gameSession.gameState && gameCards.playerHands && gameCards.playerHands[playerId] && gameCards.playerHands[playerId].length > 0 && (
-        <div className="flex-grow space-y-4">
-          <div className="text-center text-green-400 mb-4">
-            <h2 className="text-2xl font-semibold">Game Started!</h2>
-            <p>Cards have been dealt. Game is ready to play!</p>
-            <div className="mt-2 text-sm text-white/70">
-              Your hand: {gameCards.playerHands[playerId]?.length || 0} cards | Current turn: {gameSession.players.find(p => p.id === currentTurn)?.name || "Unknown"}
+        <div className="flex-grow">
+          {/* Game status header */}
+          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 mb-4">
+            <div className="flex flex-col md:flex-row justify-between items-center">
+              <div className="text-white">
+                <h2 className="text-xl font-semibold">Game in Progress</h2>
+                <p className="text-white/70">
+                  Current turn: <span className="text-yellow-400 font-medium">
+                    {gameSession.players.find(p => p.id === currentTurn)?.name || "Unknown"}
+                  </span>
+                  {currentTurn === playerId && (
+                    <span className="ml-2 text-green-400">(Your turn)</span>
+                  )}
+                </p>
+              </div>
+              <div className="text-right text-white/70">
+                <div>Your cards: {gameCards.playerHands[playerId]?.length || 0}</div>
+                <div>Phase: {turnState.currentPhase}</div>
+              </div>
             </div>
           </div>
-          
-          {/* Player's hand */}
-          <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
-            <h3 className="text-lg font-semibold mb-3">Your Hand</h3>
-            <div className="flex flex-wrap gap-2">
-              {(gameCards.playerHands[playerId] || []).map((card, index) => (
-                <div key={card.id || `card-${index}`} className="relative">
-                  <GameCard
-                    suit={card.suit}
-                    rank={card.rank}
-                    isSelected={selectedCards.some(c => c.id === card.id)}
-                    onClick={() => {
-                      console.log("Card clicked:", card);
-                      // Handle card selection logic here
-                    }}
-                  />
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Left column - Other players */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-white">Other Players</h3>
+              {gameSession.players.filter(p => p.id !== playerId).map(player => (
+                <div key={player.id} className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <h4 className="font-semibold text-white">{player.name}</h4>
+                    {currentTurn === player.id && (
+                      <Badge className="bg-yellow-600">Current Turn</Badge>
+                    )}
+                  </div>
+                  <div className="text-sm text-white/70 mb-3">
+                    Cards: {gameCards.playerHands && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 0}
+                  </div>
+                  {/* Show face-down cards for other players */}
+                  <div className="flex flex-wrap gap-1">
+                    {Array.from({ length: Math.min(gameCards.playerHands[player.id]?.length || 0, 5) }).map((_, index) => (
+                      <GameCard
+                        key={index}
+                        suit="spades"
+                        rank="A"
+                        faceUp={false}
+                        style={{ width: "40px", height: "56px" }}
+                      />
+                    ))}
+                    {(gameCards.playerHands[player.id]?.length || 0) > 5 && (
+                      <div className="text-white/50 text-xs mt-2">
+                        +{(gameCards.playerHands[player.id]?.length || 0) - 5} more
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
-          </div>
 
-          {/* Other players */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {gameSession.players.filter(p => p.id !== playerId).map(player => (
-              <div key={player.id} className="bg-black/30 backdrop-blur-md rounded-xl p-4">
-                <h3 className="text-lg font-semibold mb-2">{player.name}</h3>
-                <div className="text-sm text-white/70">
-                  Cards: {gameCards.playerHands && gameCards.playerHands[player.id] ? gameCards.playerHands[player.id].length : 0}
+            {/* Center column - Draw and discard piles */}
+            <div className="space-y-6">
+              <div className="bg-black/30 backdrop-blur-md rounded-xl p-6">
+                <h3 className="text-lg font-semibold text-white mb-4 text-center">Game Area</h3>
+                
+                <div className="grid grid-cols-2 gap-6">
+                  {/* Draw pile */}
+                  <div className="text-center">
+                    <h4 className="text-white mb-3">Draw Pile</h4>
+                    <div className="relative">
+                      <div 
+                        className={`mx-auto cursor-pointer transition-all duration-200 ${
+                          currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn
+                            ? 'hover:shadow-2xl hover:shadow-blue-500/50 ring-2 ring-blue-400/50' 
+                            : ''
+                        }`}
+                        style={{ width: "80px", height: "112px" }}
+                        onClick={() => {
+                          if (currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn) {
+                            console.log("Drawing from deck");
+                            // Handle draw from deck
+                          }
+                        }}
+                      >
+                        <GameCard
+                          suit="spades"
+                          rank="A"
+                          faceUp={false}
+                          style={{ width: "80px", height: "112px" }}
+                        />
+                      </div>
+                      <div className="text-white/60 text-sm mt-2">
+                        {gameCards.drawDeck?.length || 0} cards
+                      </div>
+                      {currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn && (
+                        <Button
+                          className="mt-2 w-full"
+                          size="sm"
+                          onClick={() => {
+                            console.log("Drawing from deck");
+                            // Handle draw from deck
+                          }}
+                        >
+                          Draw
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Discard pile */}
+                  <div className="text-center">
+                    <h4 className="text-white mb-3">Discard Pile</h4>
+                    <div className="relative">
+                      {gameCards.discardPile && gameCards.discardPile.length > 0 ? (
+                        <div 
+                          className={`mx-auto cursor-pointer transition-all duration-200 ${
+                            currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn
+                              ? 'hover:shadow-2xl hover:shadow-green-500/50 ring-2 ring-green-400/50' 
+                              : ''
+                          }`}
+                          style={{ width: "80px", height: "112px" }}
+                          onClick={() => {
+                            if (currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn) {
+                              console.log("Drawing from discard pile");
+                              // Handle draw from discard pile
+                            }
+                          }}
+                        >
+                          <GameCard
+                            suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit}
+                            rank={gameCards.discardPile[gameCards.discardPile.length - 1].rank}
+                            isJoker={gameCards.discardPile[gameCards.discardPile.length - 1].isJoker}
+                            faceUp={true}
+                            style={{ width: "80px", height: "112px" }}
+                          />
+                        </div>
+                      ) : (
+                        <div
+                          className="playing-card bg-black/20 mx-auto border-2 border-dashed border-white/30"
+                          style={{ width: "80px", height: "112px" }}
+                        >
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="text-white/50 text-xs">Empty</span>
+                          </div>
+                        </div>
+                      )}
+                      <div className="text-white/60 text-sm mt-2">
+                        {gameCards.discardPile?.length || 0} cards
+                      </div>
+                      {currentTurn === playerId && turnState.currentPhase === 'draw' && !turnState.hasDrawn && gameCards.discardPile && gameCards.discardPile.length > 0 && (
+                        <Button
+                          className="mt-2 w-full"
+                          size="sm"
+                          onClick={() => {
+                            console.log("Drawing from discard pile");
+                            // Handle draw from discard pile
+                          }}
+                        >
+                          Take
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                {currentTurn === player.id && (
-                  <div className="text-yellow-400 text-sm font-medium mt-1">
-                    Current turn
+              </div>
+
+              {/* Action buttons */}
+              {currentTurn === playerId && (
+                <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+                  <h4 className="text-white font-semibold mb-3">Actions</h4>
+                  <div className="space-y-2">
+                    <Button
+                      className="w-full"
+                      disabled={selectedCards.length < 3 || turnState.currentPhase !== 'meld'}
+                      onClick={() => {
+                        console.log("Forming meld with:", selectedCards);
+                        // Handle meld formation
+                      }}
+                    >
+                      Form Meld ({selectedCards.length} cards selected)
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full text-white border-white/30"
+                      disabled={selectedCards.length !== 1 || !turnState.canEndTurn}
+                      onClick={() => {
+                        console.log("Discarding card:", selectedCards[0]);
+                        // Handle discard
+                      }}
+                    >
+                      Discard Selected Card
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right column - Your hand */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-white">Your Hand</h3>
+              <div className="bg-black/30 backdrop-blur-md rounded-xl p-4">
+                <div className="grid grid-cols-4 gap-2">
+                  {(gameCards.playerHands[playerId] || []).map((card, index) => (
+                    <div key={card.id || `card-${index}`} className="relative">
+                      <GameCard
+                        suit={card.suit}
+                        rank={card.rank}
+                        isJoker={card.isJoker}
+                        selected={selectedCards.some(c => c.id === card.id)}
+                        onClick={() => handleCardClick(card)}
+                        style={{ width: "60px", height: "84px" }}
+                        className={`transition-all duration-200 ${
+                          selectedCards.some(c => c.id === card.id) 
+                            ? 'ring-2 ring-blue-400 shadow-lg shadow-blue-400/50' 
+                            : 'hover:shadow-lg'
+                        }`}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {selectedCards.length > 0 && (
+                  <div className="mt-3 text-center">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedCards([])}
+                      className="text-white border-white/30"
+                    >
+                      Clear Selection
+                    </Button>
                   </div>
                 )}
               </div>
-            ))}
-          </div>
-
-          {/* Draw and discard piles */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 text-center">
-              <h3 className="text-lg font-semibold mb-2">Draw Pile</h3>
-              <div className="text-sm text-white/70">
-                {gameCards.drawDeck?.length || 0} cards remaining
-              </div>
-            </div>
-            <div className="bg-black/30 backdrop-blur-md rounded-xl p-4 text-center">
-              <h3 className="text-lg font-semibold mb-2">Discard Pile</h3>
-              <div className="text-sm text-white/70">
-                {gameCards.discardPile?.length || 0} cards
-              </div>
-              {gameCards.discardPile && gameCards.discardPile.length > 0 && (
-                <div className="mt-2">
-                  <GameCard
-                    suit={gameCards.discardPile[gameCards.discardPile.length - 1].suit}
-                    rank={gameCards.discardPile[gameCards.discardPile.length - 1].rank}
-                    onClick={() => {
-                      console.log("Discard pile clicked");
-                      // Handle discard pile click
-                    }}
-                  />
-                </div>
-              )}
             </div>
           </div>
         </div>
